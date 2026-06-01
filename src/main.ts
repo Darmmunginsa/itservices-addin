@@ -42,6 +42,7 @@ interface AppState {
   loading: boolean
   projects: Project[]
   agents: Agent[]
+  emailAttachments: { id: string; name: string; size: number }[]
 }
 
 const state: AppState = {
@@ -54,6 +55,7 @@ const state: AppState = {
   loading: false,
   projects: [],
   agents: [],
+  emailAttachments: [],
 }
 
 // ─── MSAL helpers ─────────────────────────────────────────────────────────────
@@ -121,7 +123,7 @@ async function logout(): Promise<void> {
 }
 
 // ─── SharePoint REST ──────────────────────────────────────────────────────────
-async function spCreate(listTitle: string, body: Record<string, unknown>): Promise<void> {
+async function spCreate(listTitle: string, body: Record<string, unknown>): Promise<number> {
   const token = await getToken()
   const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items`
 
@@ -138,6 +140,64 @@ async function spCreate(listTitle: string, body: Record<string, unknown>): Promi
   if (!res.ok) {
     const errText = await res.text()
     throw new Error(`SharePoint error ${res.status}: ${errText}`)
+  }
+  const data = await res.json() as { Id: number }
+  return data.Id
+}
+
+async function uploadEmailAttachments(listTitle: string, itemId: number): Promise<void> {
+  const checked = document.querySelectorAll<HTMLInputElement>('.email-att-cb:checked')
+  if (checked.length === 0) return
+
+  const token = await getToken()
+
+  for (const cb of Array.from(checked)) {
+    const attId = cb.dataset['attId']!
+    const attName = cb.dataset['attName']!
+
+    // Get attachment content from Outlook
+    const content = await new Promise<string>((resolve, reject) => {
+      Office.context.mailbox.item!.getAttachmentContentAsync(attId, {}, result => {
+        if (result.status === Office.AsyncResultStatus.Succeeded) resolve(result.value.content)
+        else reject(new Error(result.error.message))
+      })
+    })
+
+    // Decode base64 → ArrayBuffer
+    const binary = atob(content)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+
+    const fileName = encodeURIComponent(attName)
+    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items(${itemId})/AttachmentFiles/add(FileName='${fileName}')`
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata', 'Content-Type': 'application/octet-stream' },
+      body: bytes.buffer,
+    })
+    if (!res.ok) throw new Error(`Upload ${attName} failed`)
+  }
+}
+
+async function spUploadAttachments(listTitle: string, itemId: number, files: FileList): Promise<void> {
+  const token = await getToken()
+  for (const file of Array.from(files)) {
+    const buffer = await file.arrayBuffer()
+    const fileName = encodeURIComponent(file.name)
+    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items(${itemId})/AttachmentFiles/add(FileName='${fileName}')`
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json;odata=nometadata',
+        'Content-Type': 'application/octet-stream',
+      },
+      body: buffer,
+    })
+    if (!res.ok) {
+      const errText = await res.text()
+      throw new Error(`Upload ${file.name} failed: ${errText}`)
+    }
   }
 }
 
@@ -181,7 +241,7 @@ async function handleSubmit(): Promise<void> {
 
       const assignedEmail = (document.getElementById('f-assigned-email') as HTMLSelectElement).value
       const assignedAgent = state.agents.find(a => a.email === assignedEmail)
-      await spCreate('HD_Tickets', {
+      const ticketId = await spCreate('HD_Tickets', {
         Title: title,
         Description: description,
         Priority: priority,
@@ -191,6 +251,9 @@ async function handleSubmit(): Promise<void> {
         AssignedEmail: assignedEmail || undefined,
         AssignedName: assignedAgent?.name ?? state.account?.name ?? '',
       })
+      const files = (document.getElementById('f-files') as HTMLInputElement).files
+      if (files && files.length > 0) await spUploadAttachments('HD_Tickets', ticketId, files)
+      await uploadEmailAttachments('HD_Tickets', ticketId)
       showToast('สร้าง Ticket สำเร็จ!')
 
     } else if (state.tab === 'task') {
@@ -204,7 +267,7 @@ async function handleSubmit(): Promise<void> {
 
       if (!projectId) { showToast('กรุณาเลือก Project', 'error'); return }
 
-      await spCreate('PM_Tasks', {
+      const taskId = await spCreate('PM_Tasks', {
         Title: title,
         DueDate: dueDate || null,
         TaskNote: note,
@@ -214,6 +277,9 @@ async function handleSubmit(): Promise<void> {
         IsAcknowledged: false,
         ProjectID: projectId,
       })
+      const files = (document.getElementById('f-files') as HTMLInputElement).files
+      if (files && files.length > 0) await spUploadAttachments('PM_Tasks', taskId, files)
+      await uploadEmailAttachments('PM_Tasks', taskId)
       showToast('สร้าง Task สำเร็จ!')
 
     } else if (state.tab === 'incident') {
@@ -230,7 +296,7 @@ async function handleSubmit(): Promise<void> {
 
       if (!projectId) { showToast('กรุณาเลือก Project', 'error'); return }
 
-      await spCreate('PM_Incidents', {
+      const incidentId = await spCreate('PM_Incidents', {
         Title: title,
         Description: description || undefined,
         Severity: severity,
@@ -241,6 +307,9 @@ async function handleSubmit(): Promise<void> {
         IncidentDate: incidentDate || todayISO(),
         Resolution: resolution || undefined,
       })
+      const files = (document.getElementById('f-files') as HTMLInputElement).files
+      if (files && files.length > 0) await spUploadAttachments('PM_Incidents', incidentId, files)
+      await uploadEmailAttachments('PM_Incidents', incidentId)
       showToast('สร้าง Incident สำเร็จ!')
     }
   } catch (err) {
@@ -355,6 +424,7 @@ function render(): void {
         class="${inputCls}"
         value="${esc(emailSenderEmail)}" />`)}
       ${field('Assign ให้ Agent', agentSelect(account.username))}
+      ${fileField()}
     `
   } else if (tab === 'task') {
     formHTML = `
@@ -365,6 +435,7 @@ function render(): void {
       ${field('Due Date', `<input id="f-due-date" type="date" class="${inputCls}" />`)}
       ${field('Task Note', `<textarea id="f-note" rows="5"
         class="${inputCls} resize-y">${esc(emailBodyPreview)}</textarea>`)}
+      ${fileField()}
     `
   } else if (tab === 'incident') {
     formHTML = `
@@ -394,6 +465,7 @@ function render(): void {
         class="${inputCls} resize-y">${esc(emailBodyPreview)}</textarea>`)}
       ${field('วิธีแก้ไข (ถ้ามี)', `<textarea id="f-resolution" rows="2"
         class="${inputCls} resize-y" placeholder="อธิบายวิธีแก้ไขปัญหา..."></textarea>`)}
+      ${fileField()}
     `
   }
 
@@ -442,6 +514,35 @@ function render(): void {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const inputCls = 'w-full border border-slate-300 rounded-md px-2.5 py-1.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white'
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function fileField(): string {
+  const emailAtts = state.emailAttachments
+  const emailAttHtml = emailAtts.length > 0
+    ? `<div class="mb-2 space-y-1">
+        <p class="text-xs text-slate-500">📎 ไฟล์แนบจาก Email (เลือกที่ต้องการแนบ):</p>
+        ${emailAtts.map(a => `
+          <label class="flex items-center gap-2 text-xs text-slate-700 cursor-pointer hover:bg-slate-50 rounded px-1 py-0.5">
+            <input type="checkbox" class="email-att-cb" data-att-id="${esc(a.id)}" data-att-name="${esc(a.name)}" checked />
+            <span class="flex-1 truncate">${esc(a.name)}</span>
+            <span class="text-slate-400 flex-shrink-0">${formatBytes(a.size)}</span>
+          </label>`).join('')}
+      </div>`
+    : ''
+
+  return `<div class="space-y-1">
+    <label class="block text-xs font-medium text-slate-600">ไฟล์แนบ</label>
+    ${emailAttHtml}
+    <input id="f-files" type="file" multiple
+      class="w-full text-xs text-slate-600 file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
+      placeholder="หรือเลือกไฟล์เพิ่มเติม" />
+  </div>`
+}
 
 function agentSelect(currentEmail: string): string {
   return `<select id="f-assigned-email" class="${inputCls}">
@@ -515,6 +616,12 @@ async function init(): Promise<void> {
             state.emailSenderEmail = sender.emailAddress ?? ''
           }
 
+          // Email attachments
+          const attachments = item.attachments ?? []
+          state.emailAttachments = attachments
+            .filter(a => a.attachmentType === Office.MailboxEnums.AttachmentType.File)
+            .map(a => ({ id: a.id, name: a.name, size: a.size }))
+
           // Body preview (async)
           item.body.getAsync(Office.CoercionType.Text, { asyncContext: {} }, result => {
             if (result.status === Office.AsyncResultStatus.Succeeded) {
@@ -523,10 +630,9 @@ async function init(): Promise<void> {
             }
             render()
           })
-          return // render will be called in body callback
+          return
         }
       }
-      // Not in Outlook or no item — render with whatever we have (dev mode)
       renderDevMode()
       render()
     })
