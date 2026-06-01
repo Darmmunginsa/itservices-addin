@@ -176,7 +176,6 @@ async function handleSubmit(): Promise<void> {
         CustomerEmail: customerEmail,
         CustomerName: state.emailSenderName || customerEmail,
         Status: 'Open',
-        Source: 'Outlook',
       })
       showToast('สร้าง Ticket สำเร็จ!')
 
@@ -191,7 +190,7 @@ async function handleSubmit(): Promise<void> {
       await spCreate('PM_Tasks', {
         Title: title,
         DueDate: dueDate || null,
-        Note: note,
+        TaskNote: note,
         AssignedTo: state.account.name ?? state.account.username,
         AssignedEmail: state.account.username,
         IsCompleted: false,
@@ -340,8 +339,8 @@ function render(): void {
       ${field('Due Date', `<input id="f-due-date" type="date"
         class="${inputCls}"
         value="" />`)}
-      ${field('หมายเหตุ', `<textarea id="f-note" rows="3"
-        class="${inputCls} resize-none">${esc(emailBodyPreview)}</textarea>`)}
+      ${field('หมายเหตุ', `<textarea id="f-note" rows="6"
+        class="${inputCls} resize-y">${esc(emailBodyPreview)}</textarea>`)}
     `
   } else if (tab === 'incident') {
     formHTML = `
