@@ -87,13 +87,19 @@ async function fetchProjects(): Promise<void> {
 }
 
 async function login(): Promise<void> {
-  const result = await msalInstance.loginPopup({
-    scopes: [SP_SCOPE],
-    prompt: 'select_account',
-  })
-  state.account = result.account
-  await fetchProjects()
-  render()
+  const btn = document.getElementById('btn-login-main') as HTMLButtonElement | null
+  const btn2 = document.getElementById('btn-login') as HTMLButtonElement | null
+  if (btn) { btn.disabled = true; btn.textContent = 'กำลังเข้าสู่ระบบ…' }
+  if (btn2) { btn2.disabled = true }
+  try {
+    const result = await msalInstance.loginPopup({ scopes: [SP_SCOPE] })
+    state.account = result.account
+    await fetchProjects()
+    render()
+  } catch {
+    if (btn) { btn.disabled = false; btn.textContent = 'เข้าสู่ระบบ' }
+    if (btn2) { btn2.disabled = false }
+  }
 }
 
 async function logout(): Promise<void> {
