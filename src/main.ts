@@ -205,16 +205,22 @@ async function handleSubmit(): Promise<void> {
       const description = (document.getElementById('f-description') as HTMLTextAreaElement).value.trim()
       const severity = (document.getElementById('f-severity') as HTMLSelectElement).value
 
+      const status = (document.getElementById('f-status') as HTMLSelectElement).value
+      const incidentDate = (document.getElementById('f-incident-date') as HTMLInputElement).value
+      const resolution = (document.getElementById('f-resolution') as HTMLTextAreaElement).value.trim()
+
       if (!projectId) { showToast('กรุณาเลือก Project', 'error'); return }
 
       await spCreate('PM_Incidents', {
         Title: title,
-        Description: description,
+        Description: description || undefined,
         Severity: severity,
-        Status: 'Open',
+        Status: status,
+        AssignedTo: state.account.name ?? state.account.username,
         AssignedEmail: state.account.username,
         ProjectID: projectId,
-        IncidentDate: todayISO(),
+        IncidentDate: incidentDate || todayISO(),
+        Resolution: resolution || undefined,
       })
       showToast('สร้าง Incident สำเร็จ!')
     }
@@ -332,30 +338,40 @@ function render(): void {
     `
   } else if (tab === 'task') {
     formHTML = `
-      ${field('Title / หัวข้อ', `<input id="f-title" type="text"
-        class="${inputCls}"
-        value="${esc(emailSubject)}" />`)}
+      ${field('ชื่อ Task *', `<input id="f-title" type="text" required
+        class="${inputCls}" value="${esc(emailSubject)}" />`)}
       ${field('Project *', projectSelect())}
-      ${field('Due Date', `<input id="f-due-date" type="date"
-        class="${inputCls}"
-        value="" />`)}
-      ${field('หมายเหตุ', `<textarea id="f-note" rows="6"
+      ${field('Due Date', `<input id="f-due-date" type="date" class="${inputCls}" />`)}
+      ${field('Task Note', `<textarea id="f-note" rows="6"
         class="${inputCls} resize-y">${esc(emailBodyPreview)}</textarea>`)}
     `
   } else if (tab === 'incident') {
     formHTML = `
-      ${field('Title / หัวข้อ', `<input id="f-title" type="text"
-        class="${inputCls}"
-        value="${esc(emailSubject)}" />`)}
+      ${field('ชื่อ Incident *', `<input id="f-title" type="text" required
+        class="${inputCls}" value="${esc(emailSubject)}" />`)}
       ${field('Project *', projectSelect())}
-      ${field('รายละเอียด', `<textarea id="f-description" rows="3"
-        class="${inputCls} resize-none">${esc(emailBodyPreview)}</textarea>`)}
-      ${field('Severity', `<select id="f-severity" class="${inputCls}">
-        <option value="Low">Low</option>
-        <option value="Medium" selected>Medium</option>
-        <option value="High">High</option>
-        <option value="Critical">Critical</option>
-      </select>`)}
+      <div class="grid grid-cols-2 gap-2">
+        <div><label class="block text-xs font-medium text-slate-600 mb-1">ความรุนแรง</label>
+          <select id="f-severity" class="${inputCls}">
+            <option value="Low">Low</option>
+            <option value="Medium" selected>Medium</option>
+            <option value="High">High</option>
+            <option value="Critical">Critical</option>
+          </select>
+        </div>
+        <div><label class="block text-xs font-medium text-slate-600 mb-1">สถานะ</label>
+          <select id="f-status" class="${inputCls}">
+            <option value="Open" selected>Open</option>
+            <option value="In Progress">In Progress</option>
+            <option value="Resolved">Resolved</option>
+          </select>
+        </div>
+      </div>
+      ${field('วันที่เกิด Incident', `<input id="f-incident-date" type="date" class="${inputCls}" value="${todayISO()}" />`)}
+      ${field('รายละเอียด', `<textarea id="f-description" rows="4"
+        class="${inputCls} resize-y">${esc(emailBodyPreview)}</textarea>`)}
+      ${field('วิธีแก้ไข (ถ้ามี)', `<textarea id="f-resolution" rows="2"
+        class="${inputCls} resize-y" placeholder="อธิบายวิธีแก้ไขปัญหา..."></textarea>`)}
     `
   }
 
