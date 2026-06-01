@@ -30,6 +30,7 @@ const msalInstance = new PublicClientApplication({
 type Tab = 'ticket' | 'task' | 'incident'
 
 interface Project { id: number; Title: string }
+interface Agent { email: string; name: string }
 
 interface AppState {
   account: AccountInfo | null
@@ -40,6 +41,7 @@ interface AppState {
   emailSenderEmail: string
   loading: boolean
   projects: Project[]
+  agents: Agent[]
 }
 
 const state: AppState = {
@@ -51,6 +53,7 @@ const state: AppState = {
   emailSenderEmail: '',
   loading: false,
   projects: [],
+  agents: [],
 }
 
 // ─── MSAL helpers ─────────────────────────────────────────────────────────────
@@ -73,15 +76,22 @@ async function fetchProjects(): Promise<void> {
   try {
     const token = await getToken()
     const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('PM_Projects')/items?$select=Id,Title&$filter=Status eq 'Active'&$orderby=Title asc`
-    const res = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/json;odata=nometadata',
-      },
-    })
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata' } })
     if (res.ok) {
       const data = await res.json() as { value: { Id: number; Title: string }[] }
       state.projects = data.value.map(p => ({ id: p.Id, Title: p.Title }))
+    }
+  } catch { /* silent */ }
+}
+
+async function fetchAgents(): Promise<void> {
+  try {
+    const token = await getToken()
+    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('HD_AgentProfiles')/items?$select=Title,EmailText&$orderby=Title asc`
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata' } })
+    if (res.ok) {
+      const data = await res.json() as { value: { Title: string; EmailText: string }[] }
+      state.agents = data.value.map(a => ({ email: a.EmailText, name: a.Title }))
     }
   } catch { /* silent */ }
 }
@@ -94,7 +104,7 @@ async function login(): Promise<void> {
   try {
     const result = await msalInstance.loginPopup({ scopes: [SP_SCOPE] })
     state.account = result.account
-    await fetchProjects()
+    await Promise.all([fetchProjects(), fetchAgents()])
     render()
   } catch {
     if (btn) { btn.disabled = false; btn.textContent = 'เข้าสู่ระบบ' }
@@ -169,6 +179,8 @@ async function handleSubmit(): Promise<void> {
       const priority = (document.getElementById('f-priority') as HTMLSelectElement).value
       const customerEmail = (document.getElementById('f-customer-email') as HTMLInputElement).value.trim()
 
+      const assignedEmail = (document.getElementById('f-assigned-email') as HTMLSelectElement).value
+      const assignedAgent = state.agents.find(a => a.email === assignedEmail)
       await spCreate('HD_Tickets', {
         Title: title,
         Description: description,
@@ -176,6 +188,8 @@ async function handleSubmit(): Promise<void> {
         CustomerEmail: customerEmail,
         CustomerName: state.emailSenderName || customerEmail,
         Status: 'Open',
+        AssignedEmail: assignedEmail || undefined,
+        AssignedName: assignedAgent?.name ?? state.account?.name ?? '',
       })
       showToast('สร้าง Ticket สำเร็จ!')
 
@@ -185,14 +199,17 @@ async function handleSubmit(): Promise<void> {
       const dueDate = (document.getElementById('f-due-date') as HTMLInputElement).value
       const note = (document.getElementById('f-note') as HTMLTextAreaElement).value.trim()
 
+      const assignedEmail = (document.getElementById('f-assigned-email') as HTMLSelectElement).value
+      const assignedAgent = state.agents.find(a => a.email === assignedEmail)
+
       if (!projectId) { showToast('กรุณาเลือก Project', 'error'); return }
 
       await spCreate('PM_Tasks', {
         Title: title,
         DueDate: dueDate || null,
         TaskNote: note,
-        AssignedTo: state.account.name ?? state.account.username,
-        AssignedEmail: state.account.username,
+        AssignedTo: assignedAgent?.name ?? state.account.name ?? state.account.username,
+        AssignedEmail: assignedEmail,
         IsCompleted: false,
         IsAcknowledged: false,
         ProjectID: projectId,
@@ -205,6 +222,8 @@ async function handleSubmit(): Promise<void> {
       const description = (document.getElementById('f-description') as HTMLTextAreaElement).value.trim()
       const severity = (document.getElementById('f-severity') as HTMLSelectElement).value
 
+      const assignedEmail = (document.getElementById('f-assigned-email') as HTMLSelectElement).value
+      const assignedAgent = state.agents.find(a => a.email === assignedEmail)
       const status = (document.getElementById('f-status') as HTMLSelectElement).value
       const incidentDate = (document.getElementById('f-incident-date') as HTMLInputElement).value
       const resolution = (document.getElementById('f-resolution') as HTMLTextAreaElement).value.trim()
@@ -216,8 +235,8 @@ async function handleSubmit(): Promise<void> {
         Description: description || undefined,
         Severity: severity,
         Status: status,
-        AssignedTo: state.account.name ?? state.account.username,
-        AssignedEmail: state.account.username,
+        AssignedTo: assignedAgent?.name ?? state.account.name ?? state.account.username,
+        AssignedEmail: assignedEmail,
         ProjectID: projectId,
         IncidentDate: incidentDate || todayISO(),
         Resolution: resolution || undefined,
@@ -335,14 +354,16 @@ function render(): void {
       ${field('Customer Email', `<input id="f-customer-email" type="email"
         class="${inputCls}"
         value="${esc(emailSenderEmail)}" />`)}
+      ${field('Assign ให้ Agent', agentSelect(account.username))}
     `
   } else if (tab === 'task') {
     formHTML = `
       ${field('ชื่อ Task *', `<input id="f-title" type="text" required
         class="${inputCls}" value="${esc(emailSubject)}" />`)}
       ${field('Project *', projectSelect())}
+      ${field('Assign ให้', agentSelect(account.username))}
       ${field('Due Date', `<input id="f-due-date" type="date" class="${inputCls}" />`)}
-      ${field('Task Note', `<textarea id="f-note" rows="6"
+      ${field('Task Note', `<textarea id="f-note" rows="5"
         class="${inputCls} resize-y">${esc(emailBodyPreview)}</textarea>`)}
     `
   } else if (tab === 'incident') {
@@ -367,6 +388,7 @@ function render(): void {
           </select>
         </div>
       </div>
+      ${field('Assign ให้ Agent', agentSelect(account.username))}
       ${field('วันที่เกิด Incident', `<input id="f-incident-date" type="date" class="${inputCls}" value="${todayISO()}" />`)}
       ${field('รายละเอียด', `<textarea id="f-description" rows="4"
         class="${inputCls} resize-y">${esc(emailBodyPreview)}</textarea>`)}
@@ -421,6 +443,15 @@ function render(): void {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const inputCls = 'w-full border border-slate-300 rounded-md px-2.5 py-1.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white'
 
+function agentSelect(currentEmail: string): string {
+  return `<select id="f-assigned-email" class="${inputCls}">
+    <option value="${esc(currentEmail)}">${esc(state.account?.name ?? currentEmail)} (ฉัน)</option>
+    ${state.agents.filter(a => a.email !== currentEmail).map(a =>
+      `<option value="${esc(a.email)}">${esc(a.name)}</option>`
+    ).join('')}
+  </select>`
+}
+
 function projectSelect(): string {
   if (state.projects.length === 0) {
     return `<div class="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-2">⚠️ ไม่พบ Project ที่ Active</div>`
@@ -463,7 +494,7 @@ async function init(): Promise<void> {
     // Try silent token to verify it's still valid
     try {
       await msalInstance.acquireTokenSilent({ scopes: [SP_SCOPE], account: accounts[0] })
-      await fetchProjects()
+      await Promise.all([fetchProjects(), fetchAgents()])
     } catch {
       state.account = null
     }
