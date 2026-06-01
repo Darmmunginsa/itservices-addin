@@ -249,7 +249,7 @@ async function handleSubmit(): Promise<void> {
         CustomerName: state.emailSenderName || customerEmail,
         Status: 'Open',
         AssignedEmail: assignedEmail || undefined,
-        AssignedName: assignedAgent?.name ?? state.account?.name ?? '',
+        AssignedToName: assignedAgent?.name ?? state.account?.name ?? '',
       })
       const files = (document.getElementById('f-files') as HTMLInputElement).files
       if (files && files.length > 0) await spUploadAttachments('HD_Tickets', ticketId, files)
