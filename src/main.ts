@@ -29,6 +29,8 @@ const msalInstance = new PublicClientApplication({
 // ─── State ────────────────────────────────────────────────────────────────────
 type Tab = 'ticket' | 'task' | 'incident'
 
+interface Project { id: number; Title: string }
+
 interface AppState {
   account: AccountInfo | null
   tab: Tab
@@ -37,6 +39,7 @@ interface AppState {
   emailSenderName: string
   emailSenderEmail: string
   loading: boolean
+  projects: Project[]
 }
 
 const state: AppState = {
@@ -47,6 +50,7 @@ const state: AppState = {
   emailSenderName: '',
   emailSenderEmail: '',
   loading: false,
+  projects: [],
 }
 
 // ─── MSAL helpers ─────────────────────────────────────────────────────────────
@@ -65,12 +69,30 @@ async function getToken(): Promise<string> {
   return result.accessToken
 }
 
+async function fetchProjects(): Promise<void> {
+  try {
+    const token = await getToken()
+    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('PM_Projects')/items?$select=Id,Title&$filter=Status eq 'Active'&$orderby=Title asc`
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json;odata=nometadata',
+      },
+    })
+    if (res.ok) {
+      const data = await res.json() as { value: { Id: number; Title: string }[] }
+      state.projects = data.value.map(p => ({ id: p.Id, Title: p.Title }))
+    }
+  } catch { /* silent */ }
+}
+
 async function login(): Promise<void> {
   const result = await msalInstance.loginPopup({
     scopes: [SP_SCOPE],
     prompt: 'select_account',
   })
   state.account = result.account
+  await fetchProjects()
   render()
 }
 
@@ -154,8 +176,11 @@ async function handleSubmit(): Promise<void> {
 
     } else if (state.tab === 'task') {
       const title = (document.getElementById('f-title') as HTMLInputElement).value.trim()
+      const projectId = parseInt((document.getElementById('f-project') as HTMLSelectElement)?.value || '0')
       const dueDate = (document.getElementById('f-due-date') as HTMLInputElement).value
       const note = (document.getElementById('f-note') as HTMLTextAreaElement).value.trim()
+
+      if (!projectId) { showToast('กรุณาเลือก Project', 'error'); return }
 
       await spCreate('PM_Tasks', {
         Title: title,
@@ -165,14 +190,17 @@ async function handleSubmit(): Promise<void> {
         AssignedEmail: state.account.username,
         IsCompleted: false,
         IsAcknowledged: false,
-        ProjectID: 0,
+        ProjectID: projectId,
       })
       showToast('สร้าง Task สำเร็จ!')
 
     } else if (state.tab === 'incident') {
       const title = (document.getElementById('f-title') as HTMLInputElement).value.trim()
+      const projectId = parseInt((document.getElementById('f-project') as HTMLSelectElement)?.value || '0')
       const description = (document.getElementById('f-description') as HTMLTextAreaElement).value.trim()
       const severity = (document.getElementById('f-severity') as HTMLSelectElement).value
+
+      if (!projectId) { showToast('กรุณาเลือก Project', 'error'); return }
 
       await spCreate('PM_Incidents', {
         Title: title,
@@ -180,7 +208,7 @@ async function handleSubmit(): Promise<void> {
         Severity: severity,
         Status: 'Open',
         AssignedEmail: state.account.username,
-        ProjectID: 0,
+        ProjectID: projectId,
         IncidentDate: todayISO(),
       })
       showToast('สร้าง Incident สำเร็จ!')
@@ -272,7 +300,7 @@ function render(): void {
             ${tab === key
               ? 'bg-blue-700 text-white'
               : 'text-slate-600 hover:bg-slate-100'}"
-        >${meta.icon} ${meta.label}</button>
+        ><span class="hidden sm:inline">${meta.icon} </span>${meta.label}</button>
       `).join('')}
     </div>
   `
@@ -302,10 +330,11 @@ function render(): void {
       ${field('Title / หัวข้อ', `<input id="f-title" type="text"
         class="${inputCls}"
         value="${esc(emailSubject)}" />`)}
+      ${field('Project *', projectSelect())}
       ${field('Due Date', `<input id="f-due-date" type="date"
         class="${inputCls}"
         value="" />`)}
-      ${field('หมายเหตุ', `<textarea id="f-note" rows="4"
+      ${field('หมายเหตุ', `<textarea id="f-note" rows="3"
         class="${inputCls} resize-none">${esc(emailBodyPreview)}</textarea>`)}
     `
   } else if (tab === 'incident') {
@@ -313,7 +342,8 @@ function render(): void {
       ${field('Title / หัวข้อ', `<input id="f-title" type="text"
         class="${inputCls}"
         value="${esc(emailSubject)}" />`)}
-      ${field('รายละเอียด', `<textarea id="f-description" rows="4"
+      ${field('Project *', projectSelect())}
+      ${field('รายละเอียด', `<textarea id="f-description" rows="3"
         class="${inputCls} resize-none">${esc(emailBodyPreview)}</textarea>`)}
       ${field('Severity', `<select id="f-severity" class="${inputCls}">
         <option value="Low">Low</option>
@@ -321,7 +351,6 @@ function render(): void {
         <option value="High">High</option>
         <option value="Critical">Critical</option>
       </select>`)}
-      <input type="hidden" id="f-status" value="Open" />
     `
   }
 
@@ -371,6 +400,16 @@ function render(): void {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const inputCls = 'w-full border border-slate-300 rounded-md px-2.5 py-1.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white'
 
+function projectSelect(): string {
+  if (state.projects.length === 0) {
+    return `<div class="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-2">⚠️ ไม่พบ Project ที่ Active</div>`
+  }
+  return `<select id="f-project" class="${inputCls}">
+    <option value="">-- เลือก Project --</option>
+    ${state.projects.map(p => `<option value="${p.id}">${esc(p.Title)}</option>`).join('')}
+  </select>`
+}
+
 function field(label: string, control: string): string {
   return `
     <div class="space-y-1">
@@ -403,6 +442,7 @@ async function init(): Promise<void> {
     // Try silent token to verify it's still valid
     try {
       await msalInstance.acquireTokenSilent({ scopes: [SP_SCOPE], account: accounts[0] })
+      await fetchProjects()
     } catch {
       state.account = null
     }
