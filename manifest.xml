@@ -1,9 +1,8 @@
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?xml version="1.0" encoding="UTF-8"?>
 <OfficeApp
   xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
-  xmlns:mailappor="http://schemas.microsoft.com/office/mailappversionoverrides/1.0"
   xsi:type="MailApp">
 
   <Id>f3a7b2c1-d4e5-4f60-a8b9-c0d1e2f34567</Id>
@@ -60,9 +59,7 @@
 
     <Hosts>
       <Host xsi:type="MailHost">
-
         <DesktopFormFactor>
-          <FunctionFile resid="Commands.Url"/>
 
           <ExtensionPoint xsi:type="MessageReadCommandSurface">
             <OfficeTab id="TabDefault">
@@ -99,7 +96,6 @@
         <bt:Image id="Icon.80x80" DefaultValue="https://darmmunginsa.github.io/itservices-addin/icon-80.png"/>
       </bt:Images>
       <bt:Urls>
-        <bt:Url id="Commands.Url" DefaultValue="https://darmmunginsa.github.io/itservices-addin/"/>
         <bt:Url id="Taskpane.Url" DefaultValue="https://darmmunginsa.github.io/itservices-addin/"/>
       </bt:Urls>
       <bt:ShortStrings>
