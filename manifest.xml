@@ -9,9 +9,9 @@
   <Id>f3a7b2c1-d4e5-4f60-a8b9-c0d1e2f34567</Id>
   <Version>1.0.0.0</Version>
   <ProviderName>iT Services</ProviderName>
-  <DefaultLocale>th-TH</DefaultLocale>
+  <DefaultLocale>en-US</DefaultLocale>
   <DisplayName DefaultValue="iT Services Helpdesk"/>
-  <Description DefaultValue="สร้าง Ticket, Task, Incident จาก Email ได้ทันที"/>
+  <Description DefaultValue="Create Ticket, Task, or Incident directly from an email."/>
 
   <IconUrl DefaultValue="https://darmmunginsa.github.io/itservices-addin/icon-80.png"/>
   <HighResolutionIconUrl DefaultValue="https://darmmunginsa.github.io/itservices-addin/icon-128.png"/>
@@ -104,10 +104,10 @@
       </bt:Urls>
       <bt:ShortStrings>
         <bt:String id="GroupLabel" DefaultValue="iT Services"/>
-        <bt:String id="TaskpaneButton.Label" DefaultValue="สร้างงาน"/>
+        <bt:String id="TaskpaneButton.Label" DefaultValue="Create Item"/>
       </bt:ShortStrings>
       <bt:LongStrings>
-        <bt:String id="TaskpaneButton.Tooltip" DefaultValue="เปิดแผงสร้าง Ticket / Task / Incident จาก Email นี้"/>
+        <bt:String id="TaskpaneButton.Tooltip" DefaultValue="Create a Ticket, Task, or Incident from this email."/>
       </bt:LongStrings>
     </Resources>
 
