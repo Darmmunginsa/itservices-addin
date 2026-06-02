@@ -647,8 +647,8 @@ async function init(): Promise<void> {
                 // Skip noise
                 if (SKIP.includes(tag)) return ''
 
-                // <br> → newline
-                if (tag === 'br') return '\n'
+                // <br> → space (Office HTML uses <br> between words in same paragraph)
+                if (tag === 'br') return ' '
 
                 // <tr> → join cells with tab, single newline at end
                 if (tag === 'tr') {
