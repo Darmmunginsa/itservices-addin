@@ -622,44 +622,50 @@ async function init(): Promise<void> {
             .filter(a => a.attachmentType === Office.MailboxEnums.AttachmentType.File)
             .map(a => ({ id: a.id, name: a.name, size: a.size }))
 
-          // Body preview (async) — parse HTML for cleaner table/content handling
+          // Body preview (async) — use DOMParser for correct table/structure handling
           item.body.getAsync(Office.CoercionType.Html, { asyncContext: {} }, result => {
             if (result.status === Office.AsyncResultStatus.Succeeded) {
               const html = result.value as string
-              const text = html
-                // Remove <style>, <script>, <head> blocks entirely (including content)
-                .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-                .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-                .replace(/<head[^>]*>[\s\S]*?<\/head>/gi, '')
-                // Table: newline after each row, tab between cells
-                .replace(/<\/tr>/gi, '\n')
-                .replace(/<\/th>/gi, '\t')
-                .replace(/<\/td>/gi, '\t')
-                // Block elements → newlines
-                .replace(/<br\s*\/?>/gi, '\n')
-                .replace(/<\/p>/gi, '\n')
-                .replace(/<\/div>/gi, '\n')
-                .replace(/<\/li>/gi, '\n')
-                // Strip remaining tags
-                .replace(/<[^>]+>/g, '')
-                // Decode entities
-                .replace(/&nbsp;/g, ' ')
-                .replace(/&amp;/g, '&')
-                .replace(/&lt;/g, '<')
-                .replace(/&gt;/g, '>')
-                .replace(/&quot;/g, '"')
-                .replace(/&#39;/g, "'")
-                // Collapse whitespace
+              const doc = new DOMParser().parseFromString(html, 'text/html')
+
+              // Remove noise elements entirely
+              doc.querySelectorAll('style, script, head, img, meta, link').forEach(el => el.remove())
+
+              // Convert tables → plain text (each row on one line, cells tab-separated)
+              doc.querySelectorAll('tr').forEach(tr => {
+                const cells = Array.from(tr.querySelectorAll('td, th'))
+                const line = cells.map(td => (td.textContent ?? '').replace(/\s+/g, ' ').trim()).join('\t')
+                tr.replaceWith(line + '\n')
+              })
+              // Remove leftover table wrappers
+              doc.querySelectorAll('table, thead, tbody, tfoot').forEach(el => {
+                el.replaceWith(el.textContent ?? '')
+              })
+
+              // Extract text, preserve block-level line breaks
+              function extractText(node: Node): string {
+                if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? ''
+                const el = node as Element
+                const tag = el.tagName?.toLowerCase() ?? ''
+                const block = ['p','div','br','li','h1','h2','h3','h4','h5','h6','hr','blockquote']
+                let out = ''
+                for (const child of Array.from(el.childNodes)) out += extractText(child)
+                if (block.includes(tag)) out = '\n' + out + '\n'
+                return out
+              }
+
+              const raw = extractText(doc.body ?? doc.documentElement)
+              const cleaned = raw
                 .replace(/[ \t]{2,}/g, ' ')
                 .replace(/\n[ \t]+/g, '\n')
                 .replace(/\n{3,}/g, '\n\n')
                 .trim()
 
-              // Cut off at reply chain (From: / -----Original Message-----)
-              const replyIdx = text.search(/\n[-_]{3,}|\nFrom:\s+\S+.*@|\n>[ \t]/)
-              state.emailBodyPreview = (replyIdx > 100 ? text.slice(0, replyIdx) : text)
-                .trim()
-                .slice(0, 2000)
+              // Cut at reply chain or signature
+              const cutRe = /\n([-_]{3,}|From:\s|Best regards|Regards,|ขอแสดงความนับถือ|Sent:\s|________________________________)/i
+              const cutIdx = cleaned.search(cutRe)
+              state.emailBodyPreview = (cutIdx > 80 ? cleaned.slice(0, cutIdx) : cleaned)
+                .trim().slice(0, 2000)
             }
             render()
           })
