@@ -32,6 +32,13 @@ type Tab = 'ticket' | 'task' | 'incident'
 interface Project { id: number; Title: string }
 interface Agent { email: string; name: string }
 
+interface SignatureContact {
+  name: string
+  company: string
+  email: string
+  phone: string
+}
+
 interface AppState {
   account: AccountInfo | null
   tab: Tab
@@ -43,6 +50,7 @@ interface AppState {
   projects: Project[]
   agents: Agent[]
   emailAttachments: { id: string; name: string; size: number }[]
+  signatureContact: SignatureContact | null
 }
 
 const state: AppState = {
@@ -56,6 +64,7 @@ const state: AppState = {
   projects: [],
   agents: [],
   emailAttachments: [],
+  signatureContact: null,
 }
 
 // ─── MSAL helpers ─────────────────────────────────────────────────────────────
@@ -215,6 +224,80 @@ function showToast(message: string, type: 'success' | 'error' = 'success'): void
 
   container.appendChild(toast)
   setTimeout(() => toast.remove(), 4000)
+}
+
+// ─── Signature parser ─────────────────────────────────────────────────────────
+function parseSignature(sigText: string): SignatureContact | null {
+  const lines = sigText.split('\n').map(l => l.trim()).filter(Boolean)
+
+  // Email regex
+  const emailRe = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/
+  // Phone: +66, 0x-xxxx-xxxx, ext, etc.
+  const phoneRe = /(\+?[\d\s()\-]{7,}(?:ext\.?\s*\d+)?)/i
+  // Company keywords
+  const companyRe = /\b(co\.?,?\s*ltd\.?|co\.?,?\s*limited|corporation|corp\.?|บริษัท|จำกัด|holding|group|inc\.?|llc)\b/i
+
+  let email = ''
+  let phone = ''
+  let company = ''
+  const nameCandidates: string[] = []
+
+  for (const line of lines) {
+    // Skip separator lines
+    if (/^[-_=*]{2,}$/.test(line)) continue
+
+    // Greeting/closing words to skip
+    if (/^(best regards|regards|sincerely|ขอแสดงความนับถือ|ด้วยความนับถือ|from|sent|thanks|thank you)/i.test(line)) continue
+
+    if (!email) {
+      const m = line.match(emailRe)
+      if (m) { email = m[0]; continue }
+    }
+
+    if (!phone) {
+      const m = line.match(phoneRe)
+      // Must have at least 7 digits
+      if (m && m[0].replace(/\D/g, '').length >= 7) { phone = m[0].trim(); continue }
+    }
+
+    if (!company && companyRe.test(line)) {
+      company = line; continue
+    }
+
+    // Remaining short lines (2-50 chars) are name candidates
+    if (line.length >= 2 && line.length <= 50 && !/\d{4,}/.test(line)) {
+      nameCandidates.push(line)
+    }
+  }
+
+  // Pick first name candidate that isn't email/phone/company
+  const name = nameCandidates.find(n => !emailRe.test(n) && !companyRe.test(n)) ?? ''
+
+  if (!email && !name) return null
+  return { name, company, email, phone }
+}
+
+async function importAsCustomer(): Promise<void> {
+  const sig = state.signatureContact
+  if (!sig) return
+  const btn = document.getElementById('btn-import-customer') as HTMLButtonElement | null
+  if (btn) { btn.disabled = true; btn.textContent = 'กำลังบันทึก…' }
+  try {
+    await spCreate('HD_Contracts', {
+      Title: sig.name || state.emailSenderName,
+      CustomerEmail: sig.email || state.emailSenderEmail,
+      Phone: sig.phone || undefined,
+      Company: sig.company || undefined,
+      Status: 'Active',
+    })
+    showToast('เพิ่มลูกค้าสำเร็จ!')
+    state.signatureContact = null
+    render()
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    showToast(`เกิดข้อผิดพลาด: ${msg}`, 'error')
+    if (btn) { btn.disabled = false; btn.textContent = 'เพิ่มเป็นลูกค้า' }
+  }
 }
 
 // ─── Today's date (ISO) ───────────────────────────────────────────────────────
@@ -389,6 +472,26 @@ function render(): void {
          ⚠️ ไม่พบข้อมูล Email (โหมดทดสอบ)
        </div>`
 
+  // ── Signature contact card ──
+  const sig = state.signatureContact
+  const sigCardHTML = sig
+    ? `<div class="mx-3 mt-3 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2.5 text-xs text-slate-700">
+         <div class="flex items-center justify-between mb-2">
+           <span class="font-semibold text-orange-700">👤 ข้อมูลผู้ส่ง (จาก Signature)</span>
+         </div>
+         <div class="space-y-0.5 mb-2.5">
+           ${sig.name    ? `<div><span class="text-slate-400">ชื่อ:</span> <span class="font-medium">${esc(sig.name)}</span></div>` : ''}
+           ${sig.company ? `<div><span class="text-slate-400">บริษัท:</span> ${esc(sig.company)}</div>` : ''}
+           ${sig.email   ? `<div><span class="text-slate-400">Email:</span> ${esc(sig.email)}</div>` : ''}
+           ${sig.phone   ? `<div><span class="text-slate-400">โทร:</span> ${esc(sig.phone)}</div>` : ''}
+         </div>
+         <button id="btn-import-customer"
+           class="w-full bg-orange-500 hover:bg-orange-400 text-white text-xs font-semibold py-1.5 rounded-md transition">
+           + เพิ่มเป็นลูกค้า
+         </button>
+       </div>`
+    : ''
+
   // ── Tab switcher ──
   const tabsHTML = `
     <div class="mx-3 mt-3 flex rounded-lg overflow-hidden border border-slate-200 bg-white shadow-sm">
@@ -486,6 +589,7 @@ function render(): void {
     ${headerHTML}
     ${accountHTML}
     ${emailInfoHTML}
+    ${sigCardHTML}
     ${tabsHTML}
     <div class="mx-3 mt-3 space-y-3">
       ${formHTML}
@@ -500,6 +604,7 @@ function render(): void {
   // ── Event listeners ──
   document.getElementById('btn-logout')?.addEventListener('click', logout)
   document.getElementById('submit-btn')?.addEventListener('click', handleSubmit)
+  document.getElementById('btn-import-customer')?.addEventListener('click', importAsCustomer)
 
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -705,11 +810,17 @@ async function init(): Promise<void> {
               if (buf) paragraphs.push(buf.trim())
               const cleaned = paragraphs.join('\n')
 
-              // Cut at signature / reply chain
+              // Split body vs signature
               const cutRe = /\n([-_]{3,}|From:\s|Best regards|Regards,|ขอแสดงความนับถือ|Sent:\s)/i
               const cutIdx = cleaned.search(cutRe)
-              state.emailBodyPreview = (cutIdx > 80 ? cleaned.slice(0, cutIdx) : cleaned)
-                .trim().slice(0, 2000)
+              if (cutIdx > 80) {
+                state.emailBodyPreview = cleaned.slice(0, cutIdx).trim().slice(0, 2000)
+                const sigText = cleaned.slice(cutIdx).trim()
+                state.signatureContact = parseSignature(sigText)
+              } else {
+                state.emailBodyPreview = cleaned.trim().slice(0, 2000)
+                state.signatureContact = null
+              }
             }
             render()
           })
