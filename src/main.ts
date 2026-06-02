@@ -673,9 +673,11 @@ async function init(): Promise<void> {
               }
 
               const raw = walk(doc.body ?? doc.documentElement)
+              // Collapse blank lines between table rows (tab-containing lines)
               const cleaned = raw
                 .replace(/[ \t]{2,}/g, ' ')
                 .replace(/\n[ \t]+/g, '\n')
+                .replace(/(.*\t.*)\n\n+(.*\t)/g, '$1\n$2')  // remove blank lines between table rows
                 .replace(/\n{3,}/g, '\n\n')
                 .trim()
 
