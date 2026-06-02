@@ -622,47 +622,65 @@ async function init(): Promise<void> {
             .filter(a => a.attachmentType === Office.MailboxEnums.AttachmentType.File)
             .map(a => ({ id: a.id, name: a.name, size: a.size }))
 
-          // Body preview (async) — use DOMParser for correct table/structure handling
+          // Body preview (async) — recursive DOM walker, handles tables natively
           item.body.getAsync(Office.CoercionType.Html, { asyncContext: {} }, result => {
             if (result.status === Office.AsyncResultStatus.Succeeded) {
               const html = result.value as string
               const doc = new DOMParser().parseFromString(html, 'text/html')
 
-              // Remove noise elements entirely
-              doc.querySelectorAll('style, script, head, img, meta, link').forEach(el => el.remove())
+              const SKIP = ['style','script','head','img','meta','link','noscript']
+              const BLOCK = ['p','div','li','h1','h2','h3','h4','h5','h6','blockquote']
+              const TABLE_WRAP = ['table','thead','tbody','tfoot']
 
-              // Convert tables → plain text (each row on one line, cells tab-separated)
-              doc.querySelectorAll('tr').forEach(tr => {
-                const cells = Array.from(tr.querySelectorAll('td, th'))
-                const line = cells.map(td => (td.textContent ?? '').replace(/\s+/g, ' ').trim()).join('\t')
-                tr.replaceWith(line + '\n')
-              })
-              // Remove leftover table wrappers
-              doc.querySelectorAll('table, thead, tbody, tfoot').forEach(el => {
-                el.replaceWith(el.textContent ?? '')
-              })
+              function walk(node: Node): string {
+                // Text node — return as-is
+                if (node.nodeType === 3) return node.textContent ?? ''
 
-              // Extract text, preserve block-level line breaks
-              function extractText(node: Node): string {
-                if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? ''
                 const el = node as Element
-                const tag = el.tagName?.toLowerCase() ?? ''
-                const block = ['p','div','br','li','h1','h2','h3','h4','h5','h6','hr','blockquote']
+                const tag = (el.tagName ?? '').toLowerCase()
+
+                // Skip noise
+                if (SKIP.includes(tag)) return ''
+
+                // <br> → newline
+                if (tag === 'br') return '\n'
+
+                // <tr> → join cells with tab on one line
+                if (tag === 'tr') {
+                  const cells: string[] = []
+                  for (let i = 0; i < el.childNodes.length; i++) {
+                    const child = el.childNodes[i] as Element
+                    const ct = (child.tagName ?? '').toLowerCase()
+                    if (ct === 'td' || ct === 'th') {
+                      cells.push((child.textContent ?? '').replace(/\s+/g, ' ').trim())
+                    }
+                  }
+                  return cells.length ? cells.join('\t') + '\n' : ''
+                }
+
+                // Table wrappers — just recurse (tr handles content)
+                if (TABLE_WRAP.includes(tag)) {
+                  let out = ''
+                  for (let i = 0; i < el.childNodes.length; i++) out += walk(el.childNodes[i])
+                  return out
+                }
+
+                // Block elements — wrap with newlines
                 let out = ''
-                for (const child of Array.from(el.childNodes)) out += extractText(child)
-                if (block.includes(tag)) out = '\n' + out + '\n'
+                for (let i = 0; i < el.childNodes.length; i++) out += walk(el.childNodes[i])
+                if (BLOCK.includes(tag)) out = '\n' + out.trim() + '\n'
                 return out
               }
 
-              const raw = extractText(doc.body ?? doc.documentElement)
+              const raw = walk(doc.body ?? doc.documentElement)
               const cleaned = raw
                 .replace(/[ \t]{2,}/g, ' ')
                 .replace(/\n[ \t]+/g, '\n')
                 .replace(/\n{3,}/g, '\n\n')
                 .trim()
 
-              // Cut at reply chain or signature
-              const cutRe = /\n([-_]{3,}|From:\s|Best regards|Regards,|ขอแสดงความนับถือ|Sent:\s|________________________________)/i
+              // Cut at signature / reply chain
+              const cutRe = /\n([-_]{3,}|From:\s|Best regards|Regards,|ขอแสดงความนับถือ|Sent:\s)/i
               const cutIdx = cleaned.search(cutRe)
               state.emailBodyPreview = (cutIdx > 80 ? cleaned.slice(0, cutIdx) : cleaned)
                 .trim().slice(0, 2000)
