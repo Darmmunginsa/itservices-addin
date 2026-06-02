@@ -32,12 +32,6 @@ type Tab = 'ticket' | 'task' | 'incident'
 interface Project { id: number; Title: string }
 interface Agent { email: string; name: string }
 
-interface DetectedDate {
-  label: string   // display text
-  isoDate: string // YYYY-MM-DD
-  time: string    // HH:MM (24hr)
-}
-
 interface SignatureContact {
   name: string
   company: string
@@ -58,7 +52,6 @@ interface AppState {
   emailAttachments: { id: string; name: string; size: number }[]
   signatureContact: SignatureContact | null
   droppedFiles: File[]
-  detectedDates: DetectedDate[]
 }
 
 const state: AppState = {
@@ -74,7 +67,6 @@ const state: AppState = {
   emailAttachments: [],
   signatureContact: null,
   droppedFiles: [],
-  detectedDates: [],
 }
 
 // ─── MSAL helpers ─────────────────────────────────────────────────────────────
@@ -249,108 +241,6 @@ function showToast(message: string, type: 'success' | 'error' = 'success'): void
 
   container.appendChild(toast)
   setTimeout(() => toast.remove(), 4000)
-}
-
-// ─── Date detector ────────────────────────────────────────────────────────────
-function detectDates(text: string): DetectedDate[] {
-  const results: DetectedDate[] = []
-  const seen = new Set<string>()
-
-  const EN_MONTHS: Record<string, number> = {
-    january:1, february:2, march:3, april:4, may:5, june:6,
-    july:7, august:8, september:9, october:10, november:11, december:12,
-    jan:1, feb:2, mar:3, apr:4, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12,
-  }
-
-  const TH_MONTHS: Record<string, number> = {
-    'มกราคม':1,'กุมภาพันธ์':2,'มีนาคม':3,'เมษายน':4,'พฤษภาคม':5,'มิถุนายน':6,
-    'กรกฎาคม':7,'สิงหาคม':8,'กันยายน':9,'ตุลาคม':10,'พฤศจิกายน':11,'ธันวาคม':12,
-    'ม.ค.':1,'ก.พ.':2,'มี.ค.':3,'เม.ย.':4,'พ.ค.':5,'มิ.ย.':6,
-    'ก.ค.':7,'ส.ค.':8,'ก.ย.':9,'ต.ค.':10,'พ.ย.':11,'ธ.ค.':12,
-  }
-
-  function parseTime24(t: string): string {
-    const m = t.match(/(\d{1,2}):(\d{2})\s*(am|pm)?/i)
-    if (!m) return '09:00'
-    let h = parseInt(m[1]); const min = m[2]; const ap = (m[3]||'').toLowerCase()
-    if (ap === 'pm' && h < 12) h += 12
-    if (ap === 'am' && h === 12) h = 0
-    return `${String(h).padStart(2,'0')}:${min}`
-  }
-
-  function toISO(y: number, mo: number, d: number): string {
-    return `${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`
-  }
-
-  function add(label: string, isoDate: string, time: string) {
-    const key = `${isoDate}T${time}`
-    if (!seen.has(key)) { seen.add(key); results.push({ label: label.trim(), isoDate, time }) }
-  }
-
-  // Pattern 1 (English): [Day, ]Month D[st/nd/rd/th][,] YYYY at H:MM [AM/PM]
-  // e.g. "Thursday, June 4, 2026 at 2:00 PM"
-  const re1 = /(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w*,?\s+)?([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\s+at\s+(\d{1,2}:\d{2}\s*(?:AM|PM)?)/gi
-  let m: RegExpExecArray | null
-  while ((m = re1.exec(text)) !== null) {
-    const mon = EN_MONTHS[m[1].toLowerCase()]
-    if (!mon) continue
-    const iso = toISO(parseInt(m[3]), mon, parseInt(m[2]))
-    add(m[0], iso, parseTime24(m[4]))
-  }
-
-  // Pattern 2 (English reverse): D Month YYYY at H:MM [AM/PM]
-  // e.g. "4 June 2026 at 14:00"
-  const re2 = /(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})\s+(?:at|เวลา)\s+(\d{1,2}:\d{2}\s*(?:AM|PM)?)/gi
-  while ((m = re2.exec(text)) !== null) {
-    const mon = EN_MONTHS[m[2].toLowerCase()]
-    if (!mon) continue
-    const iso = toISO(parseInt(m[3]), mon, parseInt(m[1]))
-    add(m[0], iso, parseTime24(m[4]))
-  }
-
-  // Pattern 3 (Thai): D เดือนไทย YYYY/พ.ศ. [เวลา] HH:MM
-  // e.g. "4 มิถุนายน 2569 เวลา 14:00"
-  const thPat = Object.keys(TH_MONTHS).map(k => k.replace(/\./g, '\\.')).join('|')
-  const re3 = new RegExp(`(\\d{1,2})\\s+(${thPat})\\s+(\\d{4})(?:\\s+(?:เวลา|at)\\s+(\\d{1,2}:\\d{2}(?:\\s*(?:AM|PM))?))?`, 'g')
-  while ((m = re3.exec(text)) !== null) {
-    const mon = TH_MONTHS[m[2]]
-    if (!mon) continue
-    let yr = parseInt(m[3])
-    if (yr > 2400) yr -= 543  // พ.ศ. → ค.ศ.
-    const iso = toISO(yr, mon, parseInt(m[1]))
-    const time = m[4] ? parseTime24(m[4]) : '09:00'
-    add(m[0], iso, time)
-  }
-
-  // Pattern 4: DD/MM/YYYY [at/เวลา] HH:MM
-  const re4 = /(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(?:at|เวลา)\s+(\d{1,2}:\d{2}\s*(?:AM|PM)?))?/g
-  while ((m = re4.exec(text)) !== null) {
-    let yr = parseInt(m[3])
-    if (yr > 2400) yr -= 543
-    const iso = toISO(yr, parseInt(m[2]), parseInt(m[1]))
-    const time = m[4] ? parseTime24(m[4]) : '09:00'
-    add(m[0], iso, time)
-  }
-
-  return results
-}
-
-function openAppointment(d: DetectedDate): void {
-  const [yr, mo, dy] = d.isoDate.split('-').map(Number)
-  const [hh, mm] = d.time.split(':').map(Number)
-  const start = new Date(yr, mo - 1, dy, hh, mm)
-  const end   = new Date(yr, mo - 1, dy, hh + 1, mm)
-  if (typeof Office !== 'undefined' && Office.context?.mailbox?.displayNewAppointmentForm) {
-    Office.context.mailbox.displayNewAppointmentForm({
-      subject: state.emailSubject || 'นัดหมาย',
-      start,
-      end,
-      location: '',
-      body: state.emailSenderName ? `นัดกับ: ${state.emailSenderName}` : '',
-    })
-  } else {
-    showToast('ฟีเจอร์นี้ใช้ได้ใน Outlook เท่านั้น', 'error')
-  }
 }
 
 // ─── Signature parser ─────────────────────────────────────────────────────────
@@ -599,30 +489,6 @@ function render(): void {
          ⚠️ ไม่พบข้อมูล Email (โหมดทดสอบ)
        </div>`
 
-  // ── Detected dates card ──
-  const dates = state.detectedDates
-  const datesCardHTML = dates.length > 0
-    ? `<div class="mx-3 mt-3 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2.5 text-xs text-slate-700">
-         <div class="font-semibold text-purple-700 mb-2">📅 พบวัน/เวลาในเนื้อหา</div>
-         <div class="space-y-2">
-           ${dates.map((d, i) => `
-             <div class="bg-white border border-purple-100 rounded-md px-2.5 py-2">
-               <div class="font-medium text-slate-700 mb-1.5 text-xs leading-snug">${esc(d.label)}</div>
-               <div class="flex gap-1.5">
-                 <button type="button" data-date-idx="${i}" data-action="calendar"
-                   class="date-action flex-1 bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium py-1 rounded transition">
-                   📅 เพิ่มใน Calendar
-                 </button>
-                 <button type="button" data-date-idx="${i}" data-action="task"
-                   class="date-action flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium py-1 rounded transition">
-                   ✅ สร้าง Task
-                 </button>
-               </div>
-             </div>`).join('')}
-         </div>
-       </div>`
-    : ''
-
   // ── Signature contact card ──
   const sig = state.signatureContact
   const sigCardHTML = sig
@@ -740,7 +606,6 @@ function render(): void {
     ${headerHTML}
     ${accountHTML}
     ${emailInfoHTML}
-    ${datesCardHTML}
     ${sigCardHTML}
     ${tabsHTML}
     <div class="mx-3 mt-3 space-y-3">
@@ -758,25 +623,6 @@ function render(): void {
   document.getElementById('submit-btn')?.addEventListener('click', handleSubmit)
   document.getElementById('btn-import-customer')?.addEventListener('click', importAsCustomer)
 
-  // Date action buttons
-  document.querySelectorAll<HTMLButtonElement>('.date-action').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const idx = parseInt(btn.dataset['dateIdx'] ?? '-1')
-      const action = btn.dataset['action']
-      const d = state.detectedDates[idx]
-      if (!d) return
-      if (action === 'calendar') {
-        openAppointment(d)
-      } else if (action === 'task') {
-        // Switch to task tab and pre-fill due date
-        state.tab = 'task'
-        render()
-        // After render, set the date field
-        const dateInput = document.getElementById('f-due-date') as HTMLInputElement | null
-        if (dateInput) dateInput.value = d.isoDate
-      }
-    })
-  })
 
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1090,8 +936,6 @@ async function init(): Promise<void> {
                 state.signatureContact = null
               }
 
-              // Detect dates in full body (before cut)
-              state.detectedDates = detectDates(cleaned)
             }
             render()
           })
