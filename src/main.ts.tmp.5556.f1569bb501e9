@@ -29,9 +29,6 @@ const msalInstance = new PublicClientApplication({
 // ─── State ────────────────────────────────────────────────────────────────────
 type Tab = 'ticket' | 'task' | 'incident'
 
-interface Project { id: number; Title: string }
-interface Agent { email: string; name: string }
-
 interface AppState {
   account: AccountInfo | null
   tab: Tab
@@ -40,9 +37,6 @@ interface AppState {
   emailSenderName: string
   emailSenderEmail: string
   loading: boolean
-  projects: Project[]
-  agents: Agent[]
-  emailAttachments: { id: string; name: string; size: number }[]
 }
 
 const state: AppState = {
@@ -53,9 +47,6 @@ const state: AppState = {
   emailSenderName: '',
   emailSenderEmail: '',
   loading: false,
-  projects: [],
-  agents: [],
-  emailAttachments: [],
 }
 
 // ─── MSAL helpers ─────────────────────────────────────────────────────────────
@@ -74,44 +65,13 @@ async function getToken(): Promise<string> {
   return result.accessToken
 }
 
-async function fetchProjects(): Promise<void> {
-  try {
-    const token = await getToken()
-    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('PM_Projects')/items?$select=Id,Title&$filter=Status eq 'Active'&$orderby=Title asc`
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata' } })
-    if (res.ok) {
-      const data = await res.json() as { value: { Id: number; Title: string }[] }
-      state.projects = data.value.map(p => ({ id: p.Id, Title: p.Title }))
-    }
-  } catch { /* silent */ }
-}
-
-async function fetchAgents(): Promise<void> {
-  try {
-    const token = await getToken()
-    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('HD_AgentProfiles')/items?$select=Title,EmailText&$orderby=Title asc`
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata' } })
-    if (res.ok) {
-      const data = await res.json() as { value: { Title: string; EmailText: string }[] }
-      state.agents = data.value.map(a => ({ email: a.EmailText, name: a.Title }))
-    }
-  } catch { /* silent */ }
-}
-
 async function login(): Promise<void> {
-  const btn = document.getElementById('btn-login-main') as HTMLButtonElement | null
-  const btn2 = document.getElementById('btn-login') as HTMLButtonElement | null
-  if (btn) { btn.disabled = true; btn.textContent = 'กำลังเข้าสู่ระบบ…' }
-  if (btn2) { btn2.disabled = true }
-  try {
-    const result = await msalInstance.loginPopup({ scopes: [SP_SCOPE] })
-    state.account = result.account
-    await Promise.all([fetchProjects(), fetchAgents()])
-    render()
-  } catch {
-    if (btn) { btn.disabled = false; btn.textContent = 'เข้าสู่ระบบ' }
-    if (btn2) { btn2.disabled = false }
-  }
+  const result = await msalInstance.loginPopup({
+    scopes: [SP_SCOPE],
+    prompt: 'select_account',
+  })
+  state.account = result.account
+  render()
 }
 
 async function logout(): Promise<void> {
@@ -123,7 +83,7 @@ async function logout(): Promise<void> {
 }
 
 // ─── SharePoint REST ──────────────────────────────────────────────────────────
-async function spCreate(listTitle: string, body: Record<string, unknown>): Promise<number> {
+async function spCreate(listTitle: string, body: Record<string, unknown>): Promise<void> {
   const token = await getToken()
   const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items`
 
@@ -140,64 +100,6 @@ async function spCreate(listTitle: string, body: Record<string, unknown>): Promi
   if (!res.ok) {
     const errText = await res.text()
     throw new Error(`SharePoint error ${res.status}: ${errText}`)
-  }
-  const data = await res.json() as { Id: number }
-  return data.Id
-}
-
-async function uploadEmailAttachments(listTitle: string, itemId: number): Promise<void> {
-  const checked = document.querySelectorAll<HTMLInputElement>('.email-att-cb:checked')
-  if (checked.length === 0) return
-
-  const token = await getToken()
-
-  for (const cb of Array.from(checked)) {
-    const attId = cb.dataset['attId']!
-    const attName = cb.dataset['attName']!
-
-    // Get attachment content from Outlook
-    const content = await new Promise<string>((resolve, reject) => {
-      Office.context.mailbox.item!.getAttachmentContentAsync(attId, {}, result => {
-        if (result.status === Office.AsyncResultStatus.Succeeded) resolve(result.value.content)
-        else reject(new Error(result.error.message))
-      })
-    })
-
-    // Decode base64 → ArrayBuffer
-    const binary = atob(content)
-    const bytes = new Uint8Array(binary.length)
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-
-    const fileName = encodeURIComponent(attName)
-    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items(${itemId})/AttachmentFiles/add(FileName='${fileName}')`
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata', 'Content-Type': 'application/octet-stream' },
-      body: bytes.buffer,
-    })
-    if (!res.ok) throw new Error(`Upload ${attName} failed`)
-  }
-}
-
-async function spUploadAttachments(listTitle: string, itemId: number, files: FileList): Promise<void> {
-  const token = await getToken()
-  for (const file of Array.from(files)) {
-    const buffer = await file.arrayBuffer()
-    const fileName = encodeURIComponent(file.name)
-    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items(${itemId})/AttachmentFiles/add(FileName='${fileName}')`
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/json;odata=nometadata',
-        'Content-Type': 'application/octet-stream',
-      },
-      body: buffer,
-    })
-    if (!res.ok) {
-      const errText = await res.text()
-      throw new Error(`Upload ${file.name} failed: ${errText}`)
-    }
   }
 }
 
@@ -239,77 +141,48 @@ async function handleSubmit(): Promise<void> {
       const priority = (document.getElementById('f-priority') as HTMLSelectElement).value
       const customerEmail = (document.getElementById('f-customer-email') as HTMLInputElement).value.trim()
 
-      const assignedEmail = (document.getElementById('f-assigned-email') as HTMLSelectElement).value
-      const assignedAgent = state.agents.find(a => a.email === assignedEmail)
-      const ticketId = await spCreate('HD_Tickets', {
+      await spCreate('HD_Tickets', {
         Title: title,
         Description: description,
         Priority: priority,
         CustomerEmail: customerEmail,
         CustomerName: state.emailSenderName || customerEmail,
         Status: 'Open',
-        AssignedEmail: assignedEmail || undefined,
-        AssignedToName: assignedAgent?.name ?? state.account?.name ?? '',
+        Source: 'Outlook',
       })
-      const files = (document.getElementById('f-files') as HTMLInputElement).files
-      if (files && files.length > 0) await spUploadAttachments('HD_Tickets', ticketId, files)
-      await uploadEmailAttachments('HD_Tickets', ticketId)
       showToast('สร้าง Ticket สำเร็จ!')
 
     } else if (state.tab === 'task') {
       const title = (document.getElementById('f-title') as HTMLInputElement).value.trim()
-      const projectId = parseInt((document.getElementById('f-project') as HTMLSelectElement)?.value || '0')
       const dueDate = (document.getElementById('f-due-date') as HTMLInputElement).value
       const note = (document.getElementById('f-note') as HTMLTextAreaElement).value.trim()
 
-      const assignedEmail = (document.getElementById('f-assigned-email') as HTMLSelectElement).value
-      const assignedAgent = state.agents.find(a => a.email === assignedEmail)
-
-      if (!projectId) { showToast('กรุณาเลือก Project', 'error'); return }
-
-      const taskId = await spCreate('PM_Tasks', {
+      await spCreate('PM_Tasks', {
         Title: title,
         DueDate: dueDate || null,
-        TaskNote: note,
-        AssignedTo: assignedAgent?.name ?? state.account.name ?? state.account.username,
-        AssignedEmail: assignedEmail,
+        Note: note,
+        AssignedTo: state.account.name ?? state.account.username,
+        AssignedEmail: state.account.username,
         IsCompleted: false,
         IsAcknowledged: false,
-        ProjectID: projectId,
+        ProjectID: 0,
       })
-      const files = (document.getElementById('f-files') as HTMLInputElement).files
-      if (files && files.length > 0) await spUploadAttachments('PM_Tasks', taskId, files)
-      await uploadEmailAttachments('PM_Tasks', taskId)
       showToast('สร้าง Task สำเร็จ!')
 
     } else if (state.tab === 'incident') {
       const title = (document.getElementById('f-title') as HTMLInputElement).value.trim()
-      const projectId = parseInt((document.getElementById('f-project') as HTMLSelectElement)?.value || '0')
       const description = (document.getElementById('f-description') as HTMLTextAreaElement).value.trim()
       const severity = (document.getElementById('f-severity') as HTMLSelectElement).value
 
-      const assignedEmail = (document.getElementById('f-assigned-email') as HTMLSelectElement).value
-      const assignedAgent = state.agents.find(a => a.email === assignedEmail)
-      const status = (document.getElementById('f-status') as HTMLSelectElement).value
-      const incidentDate = (document.getElementById('f-incident-date') as HTMLInputElement).value
-      const resolution = (document.getElementById('f-resolution') as HTMLTextAreaElement).value.trim()
-
-      if (!projectId) { showToast('กรุณาเลือก Project', 'error'); return }
-
-      const incidentId = await spCreate('PM_Incidents', {
+      await spCreate('PM_Incidents', {
         Title: title,
-        Description: description || undefined,
+        Description: description,
         Severity: severity,
-        Status: status,
-        AssignedTo: assignedAgent?.name ?? state.account.name ?? state.account.username,
-        AssignedEmail: assignedEmail,
-        ProjectID: projectId,
-        IncidentDate: incidentDate || todayISO(),
-        Resolution: resolution || undefined,
+        Status: 'Open',
+        AssignedEmail: state.account.username,
+        ProjectID: 0,
+        IncidentDate: todayISO(),
       })
-      const files = (document.getElementById('f-files') as HTMLInputElement).files
-      if (files && files.length > 0) await spUploadAttachments('PM_Incidents', incidentId, files)
-      await uploadEmailAttachments('PM_Incidents', incidentId)
       showToast('สร้าง Incident สำเร็จ!')
     }
   } catch (err) {
@@ -423,49 +296,32 @@ function render(): void {
       ${field('Customer Email', `<input id="f-customer-email" type="email"
         class="${inputCls}"
         value="${esc(emailSenderEmail)}" />`)}
-      ${field('Assign ให้ Agent', agentSelect(account.username))}
-      ${fileField()}
     `
   } else if (tab === 'task') {
     formHTML = `
-      ${field('ชื่อ Task *', `<input id="f-title" type="text" required
-        class="${inputCls}" value="${esc(emailSubject)}" />`)}
-      ${field('Project *', projectSelect())}
-      ${field('Assign ให้', agentSelect(account.username))}
-      ${field('Due Date', `<input id="f-due-date" type="date" class="${inputCls}" />`)}
-      ${field('Task Note', `<textarea id="f-note" rows="5"
-        class="${inputCls} resize-y">${esc(emailBodyPreview)}</textarea>`)}
-      ${fileField()}
+      ${field('Title / หัวข้อ', `<input id="f-title" type="text"
+        class="${inputCls}"
+        value="${esc(emailSubject)}" />`)}
+      ${field('Due Date', `<input id="f-due-date" type="date"
+        class="${inputCls}"
+        value="" />`)}
+      ${field('หมายเหตุ', `<textarea id="f-note" rows="4"
+        class="${inputCls} resize-none">${esc(emailBodyPreview)}</textarea>`)}
     `
   } else if (tab === 'incident') {
     formHTML = `
-      ${field('ชื่อ Incident *', `<input id="f-title" type="text" required
-        class="${inputCls}" value="${esc(emailSubject)}" />`)}
-      ${field('Project *', projectSelect())}
-      <div class="grid grid-cols-2 gap-2">
-        <div><label class="block text-xs font-medium text-slate-600 mb-1">ความรุนแรง</label>
-          <select id="f-severity" class="${inputCls}">
-            <option value="Low">Low</option>
-            <option value="Medium" selected>Medium</option>
-            <option value="High">High</option>
-            <option value="Critical">Critical</option>
-          </select>
-        </div>
-        <div><label class="block text-xs font-medium text-slate-600 mb-1">สถานะ</label>
-          <select id="f-status" class="${inputCls}">
-            <option value="Open" selected>Open</option>
-            <option value="In Progress">In Progress</option>
-            <option value="Resolved">Resolved</option>
-          </select>
-        </div>
-      </div>
-      ${field('Assign ให้ Agent', agentSelect(account.username))}
-      ${field('วันที่เกิด Incident', `<input id="f-incident-date" type="date" class="${inputCls}" value="${todayISO()}" />`)}
+      ${field('Title / หัวข้อ', `<input id="f-title" type="text"
+        class="${inputCls}"
+        value="${esc(emailSubject)}" />`)}
       ${field('รายละเอียด', `<textarea id="f-description" rows="4"
-        class="${inputCls} resize-y">${esc(emailBodyPreview)}</textarea>`)}
-      ${field('วิธีแก้ไข (ถ้ามี)', `<textarea id="f-resolution" rows="2"
-        class="${inputCls} resize-y" placeholder="อธิบายวิธีแก้ไขปัญหา..."></textarea>`)}
-      ${fileField()}
+        class="${inputCls} resize-none">${esc(emailBodyPreview)}</textarea>`)}
+      ${field('Severity', `<select id="f-severity" class="${inputCls}">
+        <option value="Low">Low</option>
+        <option value="Medium" selected>Medium</option>
+        <option value="High">High</option>
+        <option value="Critical">Critical</option>
+      </select>`)}
+      <input type="hidden" id="f-status" value="Open" />
     `
   }
 
@@ -515,54 +371,6 @@ function render(): void {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const inputCls = 'w-full border border-slate-300 rounded-md px-2.5 py-1.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white'
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
-
-function fileField(): string {
-  const emailAtts = state.emailAttachments
-  const emailAttHtml = emailAtts.length > 0
-    ? `<div class="mb-2 space-y-1">
-        <p class="text-xs text-slate-500">📎 ไฟล์แนบจาก Email (เลือกที่ต้องการแนบ):</p>
-        ${emailAtts.map(a => `
-          <label class="flex items-center gap-2 text-xs text-slate-700 cursor-pointer hover:bg-slate-50 rounded px-1 py-0.5">
-            <input type="checkbox" class="email-att-cb" data-att-id="${esc(a.id)}" data-att-name="${esc(a.name)}" checked />
-            <span class="flex-1 truncate">${esc(a.name)}</span>
-            <span class="text-slate-400 flex-shrink-0">${formatBytes(a.size)}</span>
-          </label>`).join('')}
-      </div>`
-    : ''
-
-  return `<div class="space-y-1">
-    <label class="block text-xs font-medium text-slate-600">ไฟล์แนบ</label>
-    ${emailAttHtml}
-    <input id="f-files" type="file" multiple
-      class="w-full text-xs text-slate-600 file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
-      placeholder="หรือเลือกไฟล์เพิ่มเติม" />
-  </div>`
-}
-
-function agentSelect(currentEmail: string): string {
-  return `<select id="f-assigned-email" class="${inputCls}">
-    <option value="${esc(currentEmail)}">${esc(state.account?.name ?? currentEmail)} (ฉัน)</option>
-    ${state.agents.filter(a => a.email !== currentEmail).map(a =>
-      `<option value="${esc(a.email)}">${esc(a.name)}</option>`
-    ).join('')}
-  </select>`
-}
-
-function projectSelect(): string {
-  if (state.projects.length === 0) {
-    return `<div class="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-2">⚠️ ไม่พบ Project ที่ Active</div>`
-  }
-  return `<select id="f-project" class="${inputCls}">
-    <option value="">-- เลือก Project --</option>
-    ${state.projects.map(p => `<option value="${p.id}">${esc(p.Title)}</option>`).join('')}
-  </select>`
-}
-
 function field(label: string, control: string): string {
   return `
     <div class="space-y-1">
@@ -595,7 +403,6 @@ async function init(): Promise<void> {
     // Try silent token to verify it's still valid
     try {
       await msalInstance.acquireTokenSilent({ scopes: [SP_SCOPE], account: accounts[0] })
-      await Promise.all([fetchProjects(), fetchAgents()])
     } catch {
       state.account = null
     }
@@ -616,106 +423,18 @@ async function init(): Promise<void> {
             state.emailSenderEmail = sender.emailAddress ?? ''
           }
 
-          // Email attachments
-          const attachments = item.attachments ?? []
-          state.emailAttachments = attachments
-            .filter(a => a.attachmentType === Office.MailboxEnums.AttachmentType.File)
-            .map(a => ({ id: a.id, name: a.name, size: a.size }))
-
-          // Body preview (async) — recursive DOM walker, handles tables natively
-          item.body.getAsync(Office.CoercionType.Html, { asyncContext: {} }, result => {
+          // Body preview (async)
+          item.body.getAsync(Office.CoercionType.Text, { asyncContext: {} }, result => {
             if (result.status === Office.AsyncResultStatus.Succeeded) {
-              const html = result.value as string
-              const doc = new DOMParser().parseFromString(html, 'text/html')
-
-              const SKIP = ['style','script','head','img','meta','link','noscript']
-              const BLOCK = ['p','div','li','h1','h2','h3','h4','h5','h6','blockquote']
-              const TABLE_WRAP = ['table','thead','tbody','tfoot']
-
-              function walk(node: Node, insideTable = false): string {
-                // Text node
-                if (node.nodeType === 3) {
-                  const t = node.textContent ?? ''
-                  // Skip whitespace-only text nodes inside table containers
-                  if (insideTable && t.trim() === '') return ''
-                  return t
-                }
-
-                const el = node as Element
-                const tag = (el.tagName ?? '').toLowerCase()
-
-                // Skip noise
-                if (SKIP.includes(tag)) return ''
-
-                // <br> → space (Office HTML uses <br> between words in same paragraph)
-                if (tag === 'br') return ' '
-
-                // <tr> → join cells with tab, single newline at end
-                if (tag === 'tr') {
-                  const cells: string[] = []
-                  for (let i = 0; i < el.childNodes.length; i++) {
-                    const child = el.childNodes[i] as Element
-                    const ct = (child.tagName ?? '').toLowerCase()
-                    if (ct === 'td' || ct === 'th') {
-                      cells.push((child.textContent ?? '').replace(/\s+/g, ' ').trim())
-                    }
-                  }
-                  return cells.length ? cells.join('\t') + '\n' : ''
-                }
-
-                // Table wrappers — recurse with insideTable=true to skip whitespace nodes
-                if (TABLE_WRAP.includes(tag)) {
-                  let out = ''
-                  for (let i = 0; i < el.childNodes.length; i++) out += walk(el.childNodes[i], true)
-                  return out
-                }
-
-                // Block elements — wrap with newlines
-                let out = ''
-                for (let i = 0; i < el.childNodes.length; i++) out += walk(el.childNodes[i], false)
-                if (BLOCK.includes(tag)) out = '\n' + out.trim() + '\n'
-                return out
-              }
-
-              const raw = walk(doc.body ?? doc.documentElement)
-              const collapsed = raw
-                .replace(/[ \t]{2,}/g, ' ')
-                .replace(/\n[ \t]+/g, '\n')
-                .replace(/\n{3,}/g, '\n\n')
-                .trim()
-
-              // Merge consecutive non-table lines into flowing paragraphs,
-              // keeping table rows on their own lines and blank lines as separators.
-              const lines = collapsed.split('\n')
-              const paragraphs: string[] = []
-              let buf = ''
-              for (const line of lines) {
-                if (line.trim() === '') {
-                  // Blank line → flush buffer as paragraph
-                  if (buf) { paragraphs.push(buf.trim()); buf = '' }
-                } else if (line.includes('\t')) {
-                  // Table row → flush buffer first, then add row as-is
-                  if (buf) { paragraphs.push(buf.trim()); buf = '' }
-                  paragraphs.push(line)
-                } else {
-                  // Flowing text → accumulate into buffer
-                  buf = buf ? buf + ' ' + line.trim() : line.trim()
-                }
-              }
-              if (buf) paragraphs.push(buf.trim())
-              const cleaned = paragraphs.join('\n')
-
-              // Cut at signature / reply chain
-              const cutRe = /\n([-_]{3,}|From:\s|Best regards|Regards,|ขอแสดงความนับถือ|Sent:\s)/i
-              const cutIdx = cleaned.search(cutRe)
-              state.emailBodyPreview = (cutIdx > 80 ? cleaned.slice(0, cutIdx) : cleaned)
-                .trim().slice(0, 2000)
+              const full = result.value as string
+              state.emailBodyPreview = full.slice(0, 500).trim()
             }
             render()
           })
-          return
+          return // render will be called in body callback
         }
       }
+      // Not in Outlook or no item — render with whatever we have (dev mode)
       renderDevMode()
       render()
     })

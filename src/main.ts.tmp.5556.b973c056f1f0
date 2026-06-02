@@ -622,94 +622,11 @@ async function init(): Promise<void> {
             .filter(a => a.attachmentType === Office.MailboxEnums.AttachmentType.File)
             .map(a => ({ id: a.id, name: a.name, size: a.size }))
 
-          // Body preview (async) — recursive DOM walker, handles tables natively
-          item.body.getAsync(Office.CoercionType.Html, { asyncContext: {} }, result => {
+          // Body preview (async)
+          item.body.getAsync(Office.CoercionType.Text, { asyncContext: {} }, result => {
             if (result.status === Office.AsyncResultStatus.Succeeded) {
-              const html = result.value as string
-              const doc = new DOMParser().parseFromString(html, 'text/html')
-
-              const SKIP = ['style','script','head','img','meta','link','noscript']
-              const BLOCK = ['p','div','li','h1','h2','h3','h4','h5','h6','blockquote']
-              const TABLE_WRAP = ['table','thead','tbody','tfoot']
-
-              function walk(node: Node, insideTable = false): string {
-                // Text node
-                if (node.nodeType === 3) {
-                  const t = node.textContent ?? ''
-                  // Skip whitespace-only text nodes inside table containers
-                  if (insideTable && t.trim() === '') return ''
-                  return t
-                }
-
-                const el = node as Element
-                const tag = (el.tagName ?? '').toLowerCase()
-
-                // Skip noise
-                if (SKIP.includes(tag)) return ''
-
-                // <br> → space (Office HTML uses <br> between words in same paragraph)
-                if (tag === 'br') return ' '
-
-                // <tr> → join cells with tab, single newline at end
-                if (tag === 'tr') {
-                  const cells: string[] = []
-                  for (let i = 0; i < el.childNodes.length; i++) {
-                    const child = el.childNodes[i] as Element
-                    const ct = (child.tagName ?? '').toLowerCase()
-                    if (ct === 'td' || ct === 'th') {
-                      cells.push((child.textContent ?? '').replace(/\s+/g, ' ').trim())
-                    }
-                  }
-                  return cells.length ? cells.join('\t') + '\n' : ''
-                }
-
-                // Table wrappers — recurse with insideTable=true to skip whitespace nodes
-                if (TABLE_WRAP.includes(tag)) {
-                  let out = ''
-                  for (let i = 0; i < el.childNodes.length; i++) out += walk(el.childNodes[i], true)
-                  return out
-                }
-
-                // Block elements — wrap with newlines
-                let out = ''
-                for (let i = 0; i < el.childNodes.length; i++) out += walk(el.childNodes[i], false)
-                if (BLOCK.includes(tag)) out = '\n' + out.trim() + '\n'
-                return out
-              }
-
-              const raw = walk(doc.body ?? doc.documentElement)
-              const collapsed = raw
-                .replace(/[ \t]{2,}/g, ' ')
-                .replace(/\n[ \t]+/g, '\n')
-                .replace(/\n{3,}/g, '\n\n')
-                .trim()
-
-              // Merge consecutive non-table lines into flowing paragraphs,
-              // keeping table rows on their own lines and blank lines as separators.
-              const lines = collapsed.split('\n')
-              const paragraphs: string[] = []
-              let buf = ''
-              for (const line of lines) {
-                if (line.trim() === '') {
-                  // Blank line → flush buffer as paragraph
-                  if (buf) { paragraphs.push(buf.trim()); buf = '' }
-                } else if (line.includes('\t')) {
-                  // Table row → flush buffer first, then add row as-is
-                  if (buf) { paragraphs.push(buf.trim()); buf = '' }
-                  paragraphs.push(line)
-                } else {
-                  // Flowing text → accumulate into buffer
-                  buf = buf ? buf + ' ' + line.trim() : line.trim()
-                }
-              }
-              if (buf) paragraphs.push(buf.trim())
-              const cleaned = paragraphs.join('\n')
-
-              // Cut at signature / reply chain
-              const cutRe = /\n([-_]{3,}|From:\s|Best regards|Regards,|ขอแสดงความนับถือ|Sent:\s)/i
-              const cutIdx = cleaned.search(cutRe)
-              state.emailBodyPreview = (cutIdx > 80 ? cleaned.slice(0, cutIdx) : cleaned)
-                .trim().slice(0, 2000)
+              const full = result.value as string
+              state.emailBodyPreview = full.slice(0, 500).trim()
             }
             render()
           })
