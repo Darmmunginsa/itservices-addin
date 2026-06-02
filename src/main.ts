@@ -622,26 +622,44 @@ async function init(): Promise<void> {
             .filter(a => a.attachmentType === Office.MailboxEnums.AttachmentType.File)
             .map(a => ({ id: a.id, name: a.name, size: a.size }))
 
-          // Body preview (async) — use Html then strip tags for cleaner table handling
+          // Body preview (async) — parse HTML for cleaner table/content handling
           item.body.getAsync(Office.CoercionType.Html, { asyncContext: {} }, result => {
             if (result.status === Office.AsyncResultStatus.Succeeded) {
               const html = result.value as string
               const text = html
-                .replace(/<br\s*\/?>/gi, '\n')
-                .replace(/<\/p>/gi, '\n')
+                // Remove <style>, <script>, <head> blocks entirely (including content)
+                .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+                .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+                .replace(/<head[^>]*>[\s\S]*?<\/head>/gi, '')
+                // Table: newline after each row, tab between cells
                 .replace(/<\/tr>/gi, '\n')
                 .replace(/<\/th>/gi, '\t')
                 .replace(/<\/td>/gi, '\t')
+                // Block elements → newlines
+                .replace(/<br\s*\/?>/gi, '\n')
+                .replace(/<\/p>/gi, '\n')
+                .replace(/<\/div>/gi, '\n')
+                .replace(/<\/li>/gi, '\n')
+                // Strip remaining tags
                 .replace(/<[^>]+>/g, '')
+                // Decode entities
                 .replace(/&nbsp;/g, ' ')
                 .replace(/&amp;/g, '&')
                 .replace(/&lt;/g, '<')
                 .replace(/&gt;/g, '>')
                 .replace(/&quot;/g, '"')
+                .replace(/&#39;/g, "'")
+                // Collapse whitespace
                 .replace(/[ \t]{2,}/g, ' ')
+                .replace(/\n[ \t]+/g, '\n')
                 .replace(/\n{3,}/g, '\n\n')
                 .trim()
-              state.emailBodyPreview = text.slice(0, 2000)
+
+              // Cut off at reply chain (From: / -----Original Message-----)
+              const replyIdx = text.search(/\n[-_]{3,}|\nFrom:\s+\S+.*@|\n>[ \t]/)
+              state.emailBodyPreview = (replyIdx > 100 ? text.slice(0, replyIdx) : text)
+                .trim()
+                .slice(0, 2000)
             }
             render()
           })
