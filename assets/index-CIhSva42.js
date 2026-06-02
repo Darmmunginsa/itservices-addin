@@ -152,6 +152,7 @@ ${r}`);return}throw To(e.error,e.error_description,e.suberror)?new re(e.error,e.
 `:""}if(u.includes(k)){let z="";for(let ee=0;ee<b.childNodes.length;ee++)z+=r(b.childNodes[ee]);return z}let Y="";for(let z=0;z<b.childNodes.length;z++)Y+=r(b.childNodes[z]);return h.includes(k)&&(Y=`
 `+Y.trim()+`
 `),Y};const s=i.value,c=new DOMParser().parseFromString(s,"text/html"),l=["style","script","head","img","meta","link","noscript"],h=["p","div","li","h1","h2","h3","h4","h5","h6","blockquote"],u=["table","thead","tbody","tfoot"],C=r(c.body??c.documentElement).replace(/[ \t]{2,}/g," ").replace(/\n[ \t]+/g,`
-`).replace(/\n{3,}/g,`
+`).replace(/(.*\t.*)\n\n+(.*\t)/g,`$1
+$2`).replace(/\n{3,}/g,`
 
 `).trim(),I=/\n([-_]{3,}|From:\s|Best regards|Regards,|ขอแสดงความนับถือ|Sent:\s)/i,A=C.search(I);S.emailBodyPreview=(A>80?C.slice(0,A):C).trim().slice(0,2e3)}Be()});return}}Uo(),Be()}):(Uo(),Be())}function Uo(){S.emailSubject="[DEV] Test Email Subject",S.emailSenderName="Test Sender",S.emailSenderEmail="test@example.com",S.emailBodyPreview="This is a placeholder email body for development mode."}ol().catch(a=>{console.error("Init error:",a);const e=document.getElementById("app");e&&(e.innerHTML=`<div class="p-4 text-red-600 text-sm">เกิดข้อผิดพลาด: ${String(a)}</div>`)});
