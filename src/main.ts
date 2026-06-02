@@ -622,11 +622,26 @@ async function init(): Promise<void> {
             .filter(a => a.attachmentType === Office.MailboxEnums.AttachmentType.File)
             .map(a => ({ id: a.id, name: a.name, size: a.size }))
 
-          // Body preview (async)
-          item.body.getAsync(Office.CoercionType.Text, { asyncContext: {} }, result => {
+          // Body preview (async) — use Html then strip tags for cleaner table handling
+          item.body.getAsync(Office.CoercionType.Html, { asyncContext: {} }, result => {
             if (result.status === Office.AsyncResultStatus.Succeeded) {
-              const full = result.value as string
-              state.emailBodyPreview = full.slice(0, 500).trim()
+              const html = result.value as string
+              const text = html
+                .replace(/<br\s*\/?>/gi, '\n')
+                .replace(/<\/p>/gi, '\n')
+                .replace(/<\/tr>/gi, '\n')
+                .replace(/<\/th>/gi, '\t')
+                .replace(/<\/td>/gi, '\t')
+                .replace(/<[^>]+>/g, '')
+                .replace(/&nbsp;/g, ' ')
+                .replace(/&amp;/g, '&')
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .replace(/&quot;/g, '"')
+                .replace(/[ \t]{2,}/g, ' ')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim()
+              state.emailBodyPreview = text.slice(0, 2000)
             }
             render()
           })
