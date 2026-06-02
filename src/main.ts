@@ -678,11 +678,25 @@ async function init(): Promise<void> {
               }
 
               const raw = walk(doc.body ?? doc.documentElement)
-              const cleaned = raw
+              const collapsed = raw
                 .replace(/[ \t]{2,}/g, ' ')
                 .replace(/\n[ \t]+/g, '\n')
                 .replace(/\n{3,}/g, '\n\n')
                 .trim()
+
+              // Remove blank lines sandwiched between tab-separated (table) rows
+              const lines = collapsed.split('\n')
+              const out: string[] = []
+              for (let i = 0; i < lines.length; i++) {
+                const cur = lines[i]
+                if (cur.trim() === '' && out.length > 0 && i + 1 < lines.length) {
+                  const prev = out[out.length - 1] ?? ''
+                  const next = lines[i + 1] ?? ''
+                  if (prev.includes('\t') && next.includes('\t')) continue
+                }
+                out.push(cur)
+              }
+              const cleaned = out.join('\n')
 
               // Cut at signature / reply chain
               const cutRe = /\n([-_]{3,}|From:\s|Best regards|Regards,|ขอแสดงความนับถือ|Sent:\s)/i
