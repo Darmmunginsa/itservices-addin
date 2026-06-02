@@ -284,8 +284,8 @@ async function importAsCustomer(): Promise<void> {
   if (btn) { btn.disabled = true; btn.textContent = 'กำลังบันทึก…' }
   try {
     await spCreate('HD_Contracts', {
-      Title: sig.name || state.emailSenderName,
-      CustomerEmail: sig.email || state.emailSenderEmail,
+      Title: state.emailSenderName || sig.name,
+      CustomerEmail: state.emailSenderEmail,
       Phone: sig.phone || undefined,
       Company: sig.company || undefined,
       Status: 'Active',
@@ -480,10 +480,10 @@ function render(): void {
            <span class="font-semibold text-orange-700">👤 ข้อมูลผู้ส่ง (จาก Signature)</span>
          </div>
          <div class="space-y-0.5 mb-2.5">
-           ${sig.name    ? `<div><span class="text-slate-400">ชื่อ:</span> <span class="font-medium">${esc(sig.name)}</span></div>` : ''}
-           ${sig.company ? `<div><span class="text-slate-400">บริษัท:</span> ${esc(sig.company)}</div>` : ''}
-           ${sig.email   ? `<div><span class="text-slate-400">Email:</span> ${esc(sig.email)}</div>` : ''}
-           ${sig.phone   ? `<div><span class="text-slate-400">โทร:</span> ${esc(sig.phone)}</div>` : ''}
+           ${emailSenderName  ? `<div><span class="text-slate-400">ชื่อ:</span> <span class="font-medium">${esc(emailSenderName)}</span></div>` : ''}
+           ${sig.company      ? `<div><span class="text-slate-400">บริษัท:</span> ${esc(sig.company)}</div>` : ''}
+           ${emailSenderEmail ? `<div><span class="text-slate-400">Email:</span> ${esc(emailSenderEmail)}</div>` : ''}
+           ${sig.phone        ? `<div><span class="text-slate-400">โทร:</span> ${esc(sig.phone)}</div>` : ''}
          </div>
          <button id="btn-import-customer"
            class="w-full bg-orange-500 hover:bg-orange-400 text-white text-xs font-semibold py-1.5 rounded-md transition">
