@@ -632,9 +632,14 @@ async function init(): Promise<void> {
               const BLOCK = ['p','div','li','h1','h2','h3','h4','h5','h6','blockquote']
               const TABLE_WRAP = ['table','thead','tbody','tfoot']
 
-              function walk(node: Node): string {
-                // Text node — return as-is
-                if (node.nodeType === 3) return node.textContent ?? ''
+              function walk(node: Node, insideTable = false): string {
+                // Text node
+                if (node.nodeType === 3) {
+                  const t = node.textContent ?? ''
+                  // Skip whitespace-only text nodes inside table containers
+                  if (insideTable && t.trim() === '') return ''
+                  return t
+                }
 
                 const el = node as Element
                 const tag = (el.tagName ?? '').toLowerCase()
@@ -645,7 +650,7 @@ async function init(): Promise<void> {
                 // <br> → newline
                 if (tag === 'br') return '\n'
 
-                // <tr> → join cells with tab on one line
+                // <tr> → join cells with tab, single newline at end
                 if (tag === 'tr') {
                   const cells: string[] = []
                   for (let i = 0; i < el.childNodes.length; i++) {
@@ -658,26 +663,24 @@ async function init(): Promise<void> {
                   return cells.length ? cells.join('\t') + '\n' : ''
                 }
 
-                // Table wrappers — just recurse (tr handles content)
+                // Table wrappers — recurse with insideTable=true to skip whitespace nodes
                 if (TABLE_WRAP.includes(tag)) {
                   let out = ''
-                  for (let i = 0; i < el.childNodes.length; i++) out += walk(el.childNodes[i])
+                  for (let i = 0; i < el.childNodes.length; i++) out += walk(el.childNodes[i], true)
                   return out
                 }
 
                 // Block elements — wrap with newlines
                 let out = ''
-                for (let i = 0; i < el.childNodes.length; i++) out += walk(el.childNodes[i])
+                for (let i = 0; i < el.childNodes.length; i++) out += walk(el.childNodes[i], false)
                 if (BLOCK.includes(tag)) out = '\n' + out.trim() + '\n'
                 return out
               }
 
               const raw = walk(doc.body ?? doc.documentElement)
-              // Collapse blank lines between table rows (tab-containing lines)
               const cleaned = raw
                 .replace(/[ \t]{2,}/g, ' ')
                 .replace(/\n[ \t]+/g, '\n')
-                .replace(/(.*\t.*)\n\n+(.*\t)/g, '$1\n$2')  // remove blank lines between table rows
                 .replace(/\n{3,}/g, '\n\n')
                 .trim()
 
