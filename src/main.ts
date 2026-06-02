@@ -51,6 +51,7 @@ interface AppState {
   agents: Agent[]
   emailAttachments: { id: string; name: string; size: number }[]
   signatureContact: SignatureContact | null
+  droppedFiles: File[]
 }
 
 const state: AppState = {
@@ -65,6 +66,7 @@ const state: AppState = {
   agents: [],
   emailAttachments: [],
   signatureContact: null,
+  droppedFiles: [],
 }
 
 // ─── MSAL helpers ─────────────────────────────────────────────────────────────
@@ -185,6 +187,21 @@ async function uploadEmailAttachments(listTitle: string, itemId: number): Promis
       body: bytes.buffer,
     })
     if (!res.ok) throw new Error(`Upload ${attName} failed`)
+  }
+}
+
+async function spUploadFileList(listTitle: string, itemId: number, files: File[]): Promise<void> {
+  const token = await getToken()
+  for (const file of files) {
+    const buffer = await file.arrayBuffer()
+    const fileName = encodeURIComponent(file.name)
+    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items(${itemId})/AttachmentFiles/add(FileName='${fileName}')`
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata', 'Content-Type': 'application/octet-stream' },
+      body: buffer,
+    })
+    if (!res.ok) throw new Error(`Upload ${file.name} failed`)
   }
 }
 
@@ -334,9 +351,9 @@ async function handleSubmit(): Promise<void> {
         AssignedEmail: assignedEmail || undefined,
         AssignedToName: assignedAgent?.name ?? state.account?.name ?? '',
       })
-      const files = (document.getElementById('f-files') as HTMLInputElement).files
-      if (files && files.length > 0) await spUploadAttachments('HD_Tickets', ticketId, files)
+      if (state.droppedFiles.length > 0) await spUploadFileList('HD_Tickets', ticketId, state.droppedFiles)
       await uploadEmailAttachments('HD_Tickets', ticketId)
+      state.droppedFiles = []
       showToast('สร้าง Ticket สำเร็จ!')
 
     } else if (state.tab === 'task') {
@@ -360,9 +377,9 @@ async function handleSubmit(): Promise<void> {
         IsAcknowledged: false,
         ProjectID: projectId,
       })
-      const files = (document.getElementById('f-files') as HTMLInputElement).files
-      if (files && files.length > 0) await spUploadAttachments('PM_Tasks', taskId, files)
+      if (state.droppedFiles.length > 0) await spUploadFileList('PM_Tasks', taskId, state.droppedFiles)
       await uploadEmailAttachments('PM_Tasks', taskId)
+      state.droppedFiles = []
       showToast('สร้าง Task สำเร็จ!')
 
     } else if (state.tab === 'incident') {
@@ -390,9 +407,9 @@ async function handleSubmit(): Promise<void> {
         IncidentDate: incidentDate || todayISO(),
         Resolution: resolution || undefined,
       })
-      const files = (document.getElementById('f-files') as HTMLInputElement).files
-      if (files && files.length > 0) await spUploadAttachments('PM_Incidents', incidentId, files)
+      if (state.droppedFiles.length > 0) await spUploadFileList('PM_Incidents', incidentId, state.droppedFiles)
       await uploadEmailAttachments('PM_Incidents', incidentId)
+      state.droppedFiles = []
       showToast('สร้าง Incident สำเร็จ!')
     }
   } catch (err) {
@@ -615,7 +632,77 @@ function render(): void {
       }
     })
   })
+
+  // ── Drop zone ──
+  const dropZone = document.getElementById('drop-zone')
+  const fileInput = document.getElementById('f-files') as HTMLInputElement | null
+
+  if (dropZone && fileInput) {
+    // File input change (browse)
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files) addDroppedFiles(Array.from(fileInput.files))
+      fileInput.value = ''
+    })
+
+    // Drag over
+    dropZone.addEventListener('dragover', e => {
+      e.preventDefault()
+      dropZone.classList.add('border-blue-500', 'bg-blue-50')
+    })
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('border-blue-500', 'bg-blue-50')
+    })
+
+    // Drop
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault()
+      dropZone.classList.remove('border-blue-500', 'bg-blue-50')
+      const files = Array.from(e.dataTransfer?.files ?? [])
+      if (files.length) addDroppedFiles(files)
+    })
+  }
+
+  // Remove dropped file buttons
+  document.querySelectorAll<HTMLButtonElement>('.remove-dropped').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset['remove'] ?? '-1')
+      if (idx >= 0) {
+        state.droppedFiles.splice(idx, 1)
+        render()
+      }
+    })
+  })
 }
+
+function addDroppedFiles(files: File[]): void {
+  state.droppedFiles.push(...files)
+  render()
+}
+
+// ── Global paste handler (Ctrl+V / screenshot) ──
+document.addEventListener('paste', (e: ClipboardEvent) => {
+  // Only handle paste when logged in and task pane is visible
+  if (!state.account) return
+  const items = Array.from(e.clipboardData?.items ?? [])
+  const files: File[] = []
+  for (const item of items) {
+    if (item.kind === 'file') {
+      const file = item.getAsFile()
+      if (file) {
+        // Give screenshot a meaningful name with timestamp
+        const name = file.name && file.name !== 'image.png'
+          ? file.name
+          : `screenshot-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.png`
+        files.push(new File([file], name, { type: file.type }))
+      }
+    }
+  }
+  if (files.length) {
+    e.preventDefault()
+    addDroppedFiles(files)
+    showToast(`แนบไฟล์แล้ว: ${files.map(f => f.name).join(', ')}`)
+  }
+})
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const inputCls = 'w-full border border-slate-300 rounded-md px-2.5 py-1.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white'
@@ -628,9 +715,11 @@ function formatBytes(bytes: number): string {
 
 function fileField(): string {
   const emailAtts = state.emailAttachments
+  const dropped = state.droppedFiles
+
   const emailAttHtml = emailAtts.length > 0
     ? `<div class="mb-2 space-y-1">
-        <p class="text-xs text-slate-500">📎 ไฟล์แนบจาก Email (เลือกที่ต้องการแนบ):</p>
+        <p class="text-xs text-slate-500">📎 ไฟล์แนบจาก Email:</p>
         ${emailAtts.map(a => `
           <label class="flex items-center gap-2 text-xs text-slate-700 cursor-pointer hover:bg-slate-50 rounded px-1 py-0.5">
             <input type="checkbox" class="email-att-cb" data-att-id="${esc(a.id)}" data-att-name="${esc(a.name)}" checked />
@@ -640,12 +729,36 @@ function fileField(): string {
       </div>`
     : ''
 
+  const droppedHtml = dropped.length > 0
+    ? `<div class="mt-2 space-y-1">
+        ${dropped.map((f, i) => {
+          const isImg = f.type.startsWith('image/')
+          return `<div class="flex items-center gap-2 text-xs text-slate-700 bg-slate-50 rounded px-2 py-1">
+            <span class="text-base">${isImg ? '🖼️' : '📄'}</span>
+            <span class="flex-1 truncate">${esc(f.name)}</span>
+            <span class="text-slate-400">${formatBytes(f.size)}</span>
+            <button type="button" data-remove="${i}"
+              class="remove-dropped text-red-400 hover:text-red-600 font-bold leading-none">✕</button>
+          </div>`
+        }).join('')}
+      </div>`
+    : ''
+
   return `<div class="space-y-1">
     <label class="block text-xs font-medium text-slate-600">ไฟล์แนบ</label>
     ${emailAttHtml}
-    <input id="f-files" type="file" multiple
-      class="w-full text-xs text-slate-600 file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
-      placeholder="หรือเลือกไฟล์เพิ่มเติม" />
+    <div id="drop-zone"
+      class="relative border-2 border-dashed border-slate-300 rounded-lg p-4 text-center text-xs text-slate-400
+             hover:border-blue-400 hover:bg-blue-50 transition cursor-pointer select-none">
+      <div class="pointer-events-none">
+        <div class="text-2xl mb-1">📂</div>
+        <div>ลากไฟล์มาวาง หรือ <span class="text-blue-600 font-medium">คลิกเลือก</span></div>
+        <div class="mt-0.5 text-slate-300">หรือกด <kbd class="bg-slate-100 text-slate-500 px-1 rounded">Ctrl+V</kbd> วางจาก clipboard ได้เลย</div>
+      </div>
+      <input id="f-files" type="file" multiple
+        class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+    </div>
+    ${droppedHtml}
   </div>`
 }
 
