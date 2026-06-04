@@ -28,7 +28,7 @@ const msalInstance = new PublicClientApplication({
 })
 
 // ─── State ────────────────────────────────────────────────────────────────────
-type Tab = 'ticket' | 'task' | 'incident' | 'comment'
+type Tab = 'ticket' | 'task' | 'incident' | 'comment' | 'project'
 
 interface Project { id: number; Title: string }
 interface Agent { email: string; name: string }
@@ -499,6 +499,32 @@ async function handleSubmit(): Promise<void> {
       await uploadEmailAttachments('HD_Tickets', ticketId)
       state.droppedFiles = []
       showToast('เพิ่ม Comment สำเร็จ!')
+
+    } else if (state.tab === 'project') {
+      const title = (document.getElementById('f-title') as HTMLInputElement).value.trim()
+      const company = (document.getElementById('f-company') as HTMLInputElement).value.trim()
+      const projectGroup = (document.getElementById('f-group') as HTMLSelectElement).value
+      const status = (document.getElementById('f-status') as HTMLSelectElement).value
+      const startDate = (document.getElementById('f-start') as HTMLInputElement).value
+      const endDate = (document.getElementById('f-end') as HTMLInputElement).value
+      const description = (document.getElementById('f-description') as HTMLTextAreaElement).value.trim()
+      if (!title) { showToast('กรุณาใส่ชื่อโครงการ', 'error'); return }
+
+      const newProjectId = await spCreate('PM_Projects', {
+        Title: title,
+        Company: company || undefined,
+        ProjectGroup: projectGroup,
+        Progress: 0,
+        StartDate: startDate || undefined,
+        EndDate: endDate || null,
+        Status: status,
+        CreatedByEmail: state.account.username,
+        Description: description || undefined,
+      })
+      if (state.droppedFiles.length > 0) await spUploadFileList('PM_Projects', newProjectId, state.droppedFiles)
+      await uploadEmailAttachments('PM_Projects', newProjectId)
+      state.droppedFiles = []
+      showToast('สร้างโครงการสำเร็จ!')
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -514,6 +540,7 @@ const TAB_META: Record<Tab, { label: string; icon: string }> = {
   task:     { label: 'Task',     icon: '✅' },
   incident: { label: 'Incident', icon: '🚨' },
   comment:  { label: 'Comment',  icon: '💬' },
+  project:  { label: 'Project',  icon: '📁' },
 }
 
 // ─── Render ───────────────────────────────────────────────────────────────────
@@ -706,6 +733,33 @@ function render(): void {
       </select>`)}
       ${field('Comment *', `<textarea id="f-comment" rows="5"
         class="${inputCls} resize-y" placeholder="พิมพ์ comment...">${esc(emailBodyPreview)}</textarea>`)}
+      ${fileField()}
+    `
+  } else if (tab === 'project') {
+    formHTML = `
+      ${field('ชื่อโครงการ *', `<input id="f-title" type="text" required
+        class="${inputCls}" value="${esc(emailSubject)}" />`)}
+      ${field('บริษัท / ลูกค้า', `<input id="f-company" type="text" class="${inputCls}" value="${esc(state.signatureContact?.company ?? '')}" />`)}
+      <div class="grid grid-cols-2 gap-2">
+        <div><label class="block text-xs font-medium text-slate-600 mb-1">กลุ่มโครงการ</label>
+          <select id="f-group" class="${inputCls}">
+            ${['Internal', 'External', 'R&D', 'Maintenance', 'อื่นๆ'].map(g => `<option>${g}</option>`).join('')}
+          </select>
+        </div>
+        <div><label class="block text-xs font-medium text-slate-600 mb-1">สถานะ</label>
+          <select id="f-status" class="${inputCls}">
+            ${['Planning', 'Active', 'On Hold', 'Completed', 'Cancelled'].map(s => `<option>${s}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <div><label class="block text-xs font-medium text-slate-600 mb-1">วันที่เริ่ม</label>
+          <input id="f-start" type="date" class="${inputCls}" /></div>
+        <div><label class="block text-xs font-medium text-slate-600 mb-1">วันสิ้นสุด</label>
+          <input id="f-end" type="date" class="${inputCls}" /></div>
+      </div>
+      ${field('รายละเอียด', `<textarea id="f-description" rows="4"
+        class="${inputCls} resize-y">${esc(emailBodyPreview)}</textarea>`)}
       ${fileField()}
     `
   }
