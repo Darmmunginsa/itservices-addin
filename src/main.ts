@@ -27,10 +27,11 @@ const msalInstance = new PublicClientApplication({
 })
 
 // ─── State ────────────────────────────────────────────────────────────────────
-type Tab = 'ticket' | 'task' | 'incident'
+type Tab = 'ticket' | 'task' | 'incident' | 'comment'
 
 interface Project { id: number; Title: string }
 interface Agent { email: string; name: string }
+interface TicketRef { id: number; Title: string; TicketNumber: string; Status: string }
 
 interface SignatureContact {
   name: string
@@ -52,6 +53,7 @@ interface AppState {
   emailAttachments: { id: string; name: string; size: number }[]
   signatureContact: SignatureContact | null
   droppedFiles: File[]
+  tickets: TicketRef[]
 }
 
 const state: AppState = {
@@ -67,6 +69,7 @@ const state: AppState = {
   emailAttachments: [],
   signatureContact: null,
   droppedFiles: [],
+  tickets: [],
 }
 
 // ─── MSAL helpers ─────────────────────────────────────────────────────────────
@@ -109,6 +112,19 @@ async function fetchAgents(): Promise<void> {
   } catch { /* silent */ }
 }
 
+async function fetchTickets(): Promise<void> {
+  try {
+    const token = await getToken()
+    // เปิดอยู่ก่อน (ไม่ Closed) เรียงล่าสุด
+    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('HD_Tickets')/items?$select=Id,Title,TicketNumber,Status&$filter=Status ne 'Closed'&$orderby=Modified desc&$top=200`
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata' } })
+    if (res.ok) {
+      const data = await res.json() as { value: { Id: number; Title: string; TicketNumber: string; Status: string }[] }
+      state.tickets = data.value.map(t => ({ id: t.Id, Title: t.Title, TicketNumber: t.TicketNumber, Status: t.Status }))
+    }
+  } catch { /* silent */ }
+}
+
 async function login(): Promise<void> {
   const btn = document.getElementById('btn-login-main') as HTMLButtonElement | null
   const btn2 = document.getElementById('btn-login') as HTMLButtonElement | null
@@ -117,7 +133,7 @@ async function login(): Promise<void> {
   try {
     const result = await msalInstance.loginPopup({ scopes: [SP_SCOPE] })
     state.account = result.account
-    await Promise.all([fetchProjects(), fetchAgents()])
+    await Promise.all([fetchProjects(), fetchAgents(), fetchTickets()])
     render()
   } catch {
     if (btn) { btn.disabled = false; btn.textContent = 'เข้าสู่ระบบ' }
@@ -411,6 +427,26 @@ async function handleSubmit(): Promise<void> {
       await uploadEmailAttachments('PM_Incidents', incidentId)
       state.droppedFiles = []
       showToast('สร้าง Incident สำเร็จ!')
+
+    } else if (state.tab === 'comment') {
+      const ticketId = parseInt((document.getElementById('f-ticket') as HTMLSelectElement)?.value || '0')
+      const commentText = (document.getElementById('f-comment') as HTMLTextAreaElement).value.trim()
+      const commentType = (document.getElementById('f-comment-type') as HTMLSelectElement).value
+      if (!ticketId) { showToast('กรุณาเลือก Ticket', 'error'); return }
+      if (!commentText) { showToast('กรุณาพิมพ์ Comment', 'error'); return }
+
+      await spCreate('HD_TicketComments', {
+        Title: commentText.slice(0, 100),
+        TicketID: ticketId,
+        CommentText: commentText,
+        CommentType: commentType,
+        CommentDate: new Date().toISOString(),
+      })
+      // แนบไฟล์เข้า ticket เดิม (ถ้ามี)
+      if (state.droppedFiles.length > 0) await spUploadFileList('HD_Tickets', ticketId, state.droppedFiles)
+      await uploadEmailAttachments('HD_Tickets', ticketId)
+      state.droppedFiles = []
+      showToast('เพิ่ม Comment สำเร็จ!')
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -425,6 +461,7 @@ const TAB_META: Record<Tab, { label: string; icon: string }> = {
   ticket:   { label: 'Ticket',   icon: '🎫' },
   task:     { label: 'Task',     icon: '✅' },
   incident: { label: 'Incident', icon: '🚨' },
+  comment:  { label: 'Comment',  icon: '💬' },
 }
 
 // ─── Render ───────────────────────────────────────────────────────────────────
@@ -585,6 +622,20 @@ function render(): void {
         class="${inputCls} resize-y">${esc(emailBodyPreview)}</textarea>`)}
       ${field('วิธีแก้ไข (ถ้ามี)', `<textarea id="f-resolution" rows="2"
         class="${inputCls} resize-y" placeholder="อธิบายวิธีแก้ไขปัญหา..."></textarea>`)}
+      ${fileField()}
+    `
+  } else if (tab === 'comment') {
+    formHTML = `
+      ${field('เลือก Ticket *', `<select id="f-ticket" class="${inputCls}">
+        <option value="">-- เลือก Ticket ที่จะเพิ่ม Comment --</option>
+        ${state.tickets.map(t => `<option value="${t.id}">${esc(t.TicketNumber || ('#' + t.id))} · ${esc(t.Title)}</option>`).join('')}
+      </select>`)}
+      ${field('ประเภท', `<select id="f-comment-type" class="${inputCls}">
+        <option value="Internal">Internal</option>
+        <option value="External">External</option>
+      </select>`)}
+      ${field('Comment *', `<textarea id="f-comment" rows="5"
+        class="${inputCls} resize-y" placeholder="พิมพ์ comment...">${esc(emailBodyPreview)}</textarea>`)}
       ${fileField()}
     `
   }
@@ -814,7 +865,7 @@ async function init(): Promise<void> {
     // Try silent token to verify it's still valid
     try {
       await msalInstance.acquireTokenSilent({ scopes: [SP_SCOPE], account: accounts[0] })
-      await Promise.all([fetchProjects(), fetchAgents()])
+      await Promise.all([fetchProjects(), fetchAgents(), fetchTickets()])
     } catch {
       state.account = null
     }
