@@ -9,6 +9,7 @@ const CLIENT_ID = '0bab07cf-65e6-487c-89af-c917fc1a5a13'
 const TENANT_ID = 'd569b991-89fc-4a62-9df5-eb361abcef40'
 const SHAREPOINT_URL = 'https://rpaexpert.sharepoint.com/sites/iTServicesCo.Ltd'
 const SP_SCOPE = 'https://rpaexpert.sharepoint.com/.default'
+const GRAPH_SCOPES = ['https://graph.microsoft.com/Calendars.ReadWrite']
 
 // ─── MSAL setup ───────────────────────────────────────────────────────────────
 const msalInstance = new PublicClientApplication({
@@ -88,6 +89,40 @@ async function getToken(): Promise<string> {
   return result.accessToken
 }
 
+// Graph token (Calendar)
+async function getGraphToken(): Promise<string> {
+  const accounts = msalInstance.getAllAccounts()
+  if (accounts.length === 0) throw new Error('Not signed in')
+  const request = { scopes: GRAPH_SCOPES, account: accounts[0] }
+  try {
+    const r = await msalInstance.acquireTokenSilent(request)
+    return r.accessToken
+  } catch {
+    const r = await msalInstance.acquireTokenPopup(request)
+    return r.accessToken
+  }
+}
+
+// Create Outlook Calendar event (+ optional Teams meeting + attendees)
+async function createCalendarEvent(ev: { subject: string; start: string; end: string; body?: string; attendees: string[]; isOnlineMeeting: boolean }): Promise<void> {
+  const token = await getGraphToken()
+  const payload = {
+    subject: ev.subject,
+    start: { dateTime: ev.start, timeZone: 'Asia/Bangkok' },
+    end: { dateTime: ev.end, timeZone: 'Asia/Bangkok' },
+    body: ev.body ? { contentType: 'HTML', content: ev.body.replace(/\n/g, '<br>') } : undefined,
+    attendees: ev.attendees.filter(Boolean).map(email => ({ emailAddress: { address: email }, type: 'required' })),
+    isOnlineMeeting: ev.isOnlineMeeting,
+    onlineMeetingProvider: ev.isOnlineMeeting ? 'teamsForBusiness' : undefined,
+  }
+  const res = await fetch('https://graph.microsoft.com/v1.0/me/events', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) throw new Error(`Calendar error ${res.status}: ${await res.text()}`)
+}
+
 async function fetchProjects(): Promise<void> {
   try {
     const token = await getToken()
@@ -131,7 +166,7 @@ async function login(): Promise<void> {
   if (btn) { btn.disabled = true; btn.textContent = 'กำลังเข้าสู่ระบบ…' }
   if (btn2) { btn2.disabled = true }
   try {
-    const result = await msalInstance.loginPopup({ scopes: [SP_SCOPE] })
+    const result = await msalInstance.loginPopup({ scopes: [SP_SCOPE, ...GRAPH_SCOPES] })
     state.account = result.account
     await Promise.all([fetchProjects(), fetchAgents(), fetchTickets()])
     render()
@@ -396,7 +431,24 @@ async function handleSubmit(): Promise<void> {
       if (state.droppedFiles.length > 0) await spUploadFileList('PM_Tasks', taskId, state.droppedFiles)
       await uploadEmailAttachments('PM_Tasks', taskId)
       state.droppedFiles = []
-      showToast('สร้าง Task สำเร็จ!')
+
+      // เพิ่มการประชุม Teams / Calendar (ถ้าติ๊ก)
+      const isMeeting = (document.getElementById('f-teams') as HTMLInputElement)?.checked
+      if (isMeeting && dueDate) {
+        const internal = Array.from(document.querySelectorAll<HTMLInputElement>('.att-internal:checked')).map(c => c.value)
+        const external = ((document.getElementById('f-ext-att') as HTMLInputElement)?.value || '')
+          .split(/[,;\s]+/).map(s => s.trim()).filter(Boolean)
+        const start = `${dueDate}T09:00:00`
+        const end = `${dueDate}T10:00:00`
+        try {
+          await createCalendarEvent({ subject: title, start, end, body: note, attendees: [...internal, ...external], isOnlineMeeting: true })
+          showToast('สร้าง Task + นัดประชุม Teams สำเร็จ!')
+        } catch (e) {
+          showToast('สร้าง Task แล้ว แต่สร้างนัดประชุมไม่สำเร็จ: ' + (e instanceof Error ? e.message : ''), 'error')
+        }
+      } else {
+        showToast('สร้าง Task สำเร็จ!')
+      }
 
     } else if (state.tab === 'incident') {
       const title = (document.getElementById('f-title') as HTMLInputElement).value.trim()
@@ -590,8 +642,26 @@ function render(): void {
       ${field('Project *', projectSelect())}
       ${field('Assign ให้', agentSelect(account.username))}
       ${field('Due Date', `<input id="f-due-date" type="date" class="${inputCls}" />`)}
-      ${field('Task Note', `<textarea id="f-note" rows="5"
+      ${field('Task Note', `<textarea id="f-note" rows="4"
         class="${inputCls} resize-y">${esc(emailBodyPreview)}</textarea>`)}
+      <label class="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer mb-1">
+        <input id="f-teams" type="checkbox" class="rounded" onchange="document.getElementById('teams-fields').style.display=this.checked?'block':'none'" />
+        💻 เพิ่มการประชุมออนไลน์ (Teams) — ใช้เวลา 09:00–10:00 ของวัน Due Date
+      </label>
+      <div id="teams-fields" style="display:none" class="space-y-2 mb-2">
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">ผู้เข้าร่วม Internal</label>
+          <div class="max-h-28 overflow-y-auto border border-slate-200 rounded-md p-1.5 space-y-0.5">
+            ${state.agents.map(a => `<label class="flex items-center gap-2 text-xs text-slate-700 px-1 py-0.5 hover:bg-slate-50 rounded cursor-pointer">
+              <input type="checkbox" class="att-internal" value="${esc(a.email)}" /> ${esc(a.name)}
+            </label>`).join('')}
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Email ภายนอก (คั่นด้วย ,)</label>
+          <input id="f-ext-att" type="text" class="${inputCls}" placeholder="someone@company.com, ..." />
+        </div>
+      </div>
       ${fileField()}
     `
   } else if (tab === 'incident') {
