@@ -126,7 +126,7 @@ async function createCalendarEvent(ev: { subject: string; start: string; end: st
 async function fetchProjects(): Promise<void> {
   try {
     const token = await getToken()
-    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('PM_Projects')/items?$select=Id,Title&$filter=Status eq 'Active'&$orderby=Title asc`
+    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('PM_Projects')/items?$select=Id,Title&$orderby=Title asc&$top=500`
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata' } })
     if (res.ok) {
       const data = await res.json() as { value: { Id: number; Title: string }[] }
@@ -544,9 +544,34 @@ const TAB_META: Record<Tab, { label: string; icon: string }> = {
 }
 
 // ─── Render ───────────────────────────────────────────────────────────────────
+const FORM_IDS = ['f-title','f-description','f-priority','f-customer-email','f-assigned-email','f-project','f-due-date','f-note','f-severity','f-status','f-incident-date','f-resolution','f-ticket','f-comment','f-comment-type','f-company','f-group','f-start','f-end','f-ext-att']
+let formCache: Record<string, string | boolean> = {}
+function captureForm(): void {
+  for (const id of FORM_IDS) {
+    const el = document.getElementById(id) as HTMLInputElement | null
+    if (el) formCache[id] = el.value
+  }
+  const teams = document.getElementById('f-teams') as HTMLInputElement | null
+  if (teams) formCache['f-teams'] = teams.checked
+}
+function restoreForm(): void {
+  for (const id of FORM_IDS) {
+    const el = document.getElementById(id) as HTMLInputElement | null
+    if (el && formCache[id] !== undefined && formCache[id] !== '') el.value = formCache[id] as string
+  }
+  const teams = document.getElementById('f-teams') as HTMLInputElement | null
+  if (teams && formCache['f-teams'] !== undefined) {
+    teams.checked = formCache['f-teams'] as boolean
+    const tf = document.getElementById('teams-fields')
+    if (tf) tf.style.display = teams.checked ? 'block' : 'none'
+  }
+}
+
 function render(): void {
   const app = document.getElementById('app')
   if (!app) return
+
+  captureForm()  // preserve typed values across re-render
 
   const { account, tab, emailSubject, emailSenderName, emailSenderEmail, emailBodyPreview } = state
   const isLoggedIn = account !== null
@@ -848,6 +873,8 @@ function render(): void {
       }
     })
   })
+
+  restoreForm()  // re-apply typed values after re-render
 }
 
 function addDroppedFiles(files: File[]): void {
