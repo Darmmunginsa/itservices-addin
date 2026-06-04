@@ -166,7 +166,7 @@ async function login(): Promise<void> {
   if (btn) { btn.disabled = true; btn.textContent = 'กำลังเข้าสู่ระบบ…' }
   if (btn2) { btn2.disabled = true }
   try {
-    const result = await msalInstance.loginPopup({ scopes: [SP_SCOPE, ...GRAPH_SCOPES] })
+    const result = await msalInstance.loginPopup({ scopes: [SP_SCOPE] })
     state.account = result.account
     await Promise.all([fetchProjects(), fetchAgents(), fetchTickets()])
     render()
