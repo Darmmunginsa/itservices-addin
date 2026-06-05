@@ -9,7 +9,6 @@ const CLIENT_ID = '0bab07cf-65e6-487c-89af-c917fc1a5a13'
 const TENANT_ID = 'd569b991-89fc-4a62-9df5-eb361abcef40'
 const SHAREPOINT_URL = 'https://rpaexpert.sharepoint.com/sites/iTServicesCo.Ltd'
 const SP_SCOPE = 'https://rpaexpert.sharepoint.com/.default'
-const GRAPH_SCOPES = ['https://graph.microsoft.com/Calendars.ReadWrite']
 
 // ─── MSAL setup ───────────────────────────────────────────────────────────────
 const msalInstance = new PublicClientApplication({
@@ -28,7 +27,7 @@ const msalInstance = new PublicClientApplication({
 })
 
 // ─── State ────────────────────────────────────────────────────────────────────
-type Tab = 'ticket' | 'task' | 'incident' | 'comment' | 'project'
+type Tab = 'ticket' | 'task' | 'incident' | 'comment'
 
 interface Project { id: number; Title: string }
 interface Agent { email: string; name: string }
@@ -89,44 +88,10 @@ async function getToken(): Promise<string> {
   return result.accessToken
 }
 
-// Graph token (Calendar)
-async function getGraphToken(): Promise<string> {
-  const accounts = msalInstance.getAllAccounts()
-  if (accounts.length === 0) throw new Error('Not signed in')
-  const request = { scopes: GRAPH_SCOPES, account: accounts[0] }
-  try {
-    const r = await msalInstance.acquireTokenSilent(request)
-    return r.accessToken
-  } catch {
-    const r = await msalInstance.acquireTokenPopup(request)
-    return r.accessToken
-  }
-}
-
-// Create Outlook Calendar event (+ optional Teams meeting + attendees)
-async function createCalendarEvent(ev: { subject: string; start: string; end: string; body?: string; attendees: string[]; isOnlineMeeting: boolean }): Promise<void> {
-  const token = await getGraphToken()
-  const payload = {
-    subject: ev.subject,
-    start: { dateTime: ev.start, timeZone: 'Asia/Bangkok' },
-    end: { dateTime: ev.end, timeZone: 'Asia/Bangkok' },
-    body: ev.body ? { contentType: 'HTML', content: ev.body.replace(/\n/g, '<br>') } : undefined,
-    attendees: ev.attendees.filter(Boolean).map(email => ({ emailAddress: { address: email }, type: 'required' })),
-    isOnlineMeeting: ev.isOnlineMeeting,
-    onlineMeetingProvider: ev.isOnlineMeeting ? 'teamsForBusiness' : undefined,
-  }
-  const res = await fetch('https://graph.microsoft.com/v1.0/me/events', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  if (!res.ok) throw new Error(`Calendar error ${res.status}: ${await res.text()}`)
-}
-
 async function fetchProjects(): Promise<void> {
   try {
     const token = await getToken()
-    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('PM_Projects')/items?$select=Id,Title&$orderby=Title asc&$top=500`
+    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('PM_Projects')/items?$select=Id,Title&$filter=Status eq 'Active'&$orderby=Title asc`
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata' } })
     if (res.ok) {
       const data = await res.json() as { value: { Id: number; Title: string }[] }
@@ -431,24 +396,7 @@ async function handleSubmit(): Promise<void> {
       if (state.droppedFiles.length > 0) await spUploadFileList('PM_Tasks', taskId, state.droppedFiles)
       await uploadEmailAttachments('PM_Tasks', taskId)
       state.droppedFiles = []
-
-      // เพิ่มการประชุม Teams / Calendar (ถ้าติ๊ก)
-      const isMeeting = (document.getElementById('f-teams') as HTMLInputElement)?.checked
-      if (isMeeting && dueDate) {
-        const internal = Array.from(document.querySelectorAll<HTMLInputElement>('.att-internal:checked')).map(c => c.value)
-        const external = ((document.getElementById('f-ext-att') as HTMLInputElement)?.value || '')
-          .split(/[,;\s]+/).map(s => s.trim()).filter(Boolean)
-        const start = `${dueDate}T09:00:00`
-        const end = `${dueDate}T10:00:00`
-        try {
-          await createCalendarEvent({ subject: title, start, end, body: note, attendees: [...internal, ...external], isOnlineMeeting: true })
-          showToast('สร้าง Task + นัดประชุม Teams สำเร็จ!')
-        } catch (e) {
-          showToast('สร้าง Task แล้ว แต่สร้างนัดประชุมไม่สำเร็จ: ' + (e instanceof Error ? e.message : ''), 'error')
-        }
-      } else {
-        showToast('สร้าง Task สำเร็จ!')
-      }
+      showToast('สร้าง Task สำเร็จ!')
 
     } else if (state.tab === 'incident') {
       const title = (document.getElementById('f-title') as HTMLInputElement).value.trim()
@@ -499,32 +447,6 @@ async function handleSubmit(): Promise<void> {
       await uploadEmailAttachments('HD_Tickets', ticketId)
       state.droppedFiles = []
       showToast('เพิ่ม Comment สำเร็จ!')
-
-    } else if (state.tab === 'project') {
-      const title = (document.getElementById('f-title') as HTMLInputElement).value.trim()
-      const company = (document.getElementById('f-company') as HTMLInputElement).value.trim()
-      const projectGroup = (document.getElementById('f-group') as HTMLSelectElement).value
-      const status = (document.getElementById('f-status') as HTMLSelectElement).value
-      const startDate = (document.getElementById('f-start') as HTMLInputElement).value
-      const endDate = (document.getElementById('f-end') as HTMLInputElement).value
-      const description = (document.getElementById('f-description') as HTMLTextAreaElement).value.trim()
-      if (!title) { showToast('กรุณาใส่ชื่อโครงการ', 'error'); return }
-
-      const newProjectId = await spCreate('PM_Projects', {
-        Title: title,
-        Company: company || undefined,
-        ProjectGroup: projectGroup,
-        Progress: 0,
-        StartDate: startDate || undefined,
-        EndDate: endDate || null,
-        Status: status,
-        CreatedByEmail: state.account.username,
-        Description: description || undefined,
-      })
-      if (state.droppedFiles.length > 0) await spUploadFileList('PM_Projects', newProjectId, state.droppedFiles)
-      await uploadEmailAttachments('PM_Projects', newProjectId)
-      state.droppedFiles = []
-      showToast('สร้างโครงการสำเร็จ!')
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -540,57 +462,30 @@ const TAB_META: Record<Tab, { label: string; icon: string }> = {
   task:     { label: 'Task',     icon: '✅' },
   incident: { label: 'Incident', icon: '🚨' },
   comment:  { label: 'Comment',  icon: '💬' },
-  project:  { label: 'Project',  icon: '📁' },
 }
 
 // ─── Render ───────────────────────────────────────────────────────────────────
-const FORM_IDS = ['f-title','f-description','f-priority','f-customer-email','f-assigned-email','f-project','f-due-date','f-note','f-severity','f-status','f-incident-date','f-resolution','f-ticket','f-comment','f-comment-type','f-company','f-group','f-start','f-end','f-ext-att']
-let formCache: Record<string, string | boolean> = {}
-function captureForm(): void {
-  for (const id of FORM_IDS) {
-    const el = document.getElementById(id) as HTMLInputElement | null
-    if (el) formCache[id] = el.value
-  }
-  const teams = document.getElementById('f-teams') as HTMLInputElement | null
-  if (teams) formCache['f-teams'] = teams.checked
-}
-function restoreForm(): void {
-  for (const id of FORM_IDS) {
-    const el = document.getElementById(id) as HTMLInputElement | null
-    if (el && formCache[id] !== undefined && formCache[id] !== '') el.value = formCache[id] as string
-  }
-  const teams = document.getElementById('f-teams') as HTMLInputElement | null
-  if (teams && formCache['f-teams'] !== undefined) {
-    teams.checked = formCache['f-teams'] as boolean
-    const tf = document.getElementById('teams-fields')
-    if (tf) tf.style.display = teams.checked ? 'block' : 'none'
-  }
-}
-
 function render(): void {
   const app = document.getElementById('app')
   if (!app) return
-
-  captureForm()  // preserve typed values across re-render
 
   const { account, tab, emailSubject, emailSenderName, emailSenderEmail, emailBodyPreview } = state
   const isLoggedIn = account !== null
 
   // ── Header ──
   const headerHTML = `
-    <div class="bg-gradient-to-r from-blue-700 to-blue-600 text-white px-4 py-2.5 flex items-center gap-2.5 shadow flex-shrink-0">
-      <div class="w-7 h-7 bg-white/95 rounded-lg flex items-center justify-center flex-shrink-0">
-        <span class="text-blue-700 font-extrabold text-xs">iT</span>
-      </div>
-      <div class="min-w-0 flex-1">
-        <div class="font-semibold text-sm leading-tight truncate">iT Services Helpdesk</div>
-        ${isLoggedIn ? `<div class="text-[10px] text-blue-100 truncate">${esc(account?.name ?? account?.username ?? '')}</div>` : ''}
+    <div class="bg-blue-700 text-white px-4 py-3 flex items-center justify-between shadow">
+      <div class="flex items-center gap-2">
+        <div class="w-7 h-7 bg-white rounded flex items-center justify-center">
+          <span class="text-blue-700 font-bold text-xs">iT</span>
+        </div>
+        <span class="font-semibold text-sm tracking-wide">iT Services Helpdesk</span>
       </div>
       ${isLoggedIn
-        ? `<button id="btn-logout" title="ออกจากระบบ" class="p-1.5 rounded-lg hover:bg-white/15 transition flex-shrink-0">
-             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        ? `<button id="btn-logout" class="text-xs bg-blue-600 hover:bg-blue-500 px-2 py-1 rounded transition">
+             ออกจากระบบ
            </button>`
-        : `<button id="btn-login" class="text-xs bg-white text-blue-700 font-semibold hover:bg-blue-50 px-3 py-1 rounded-lg transition flex-shrink-0">
+        : `<button id="btn-login" class="text-xs bg-white text-blue-700 font-semibold hover:bg-blue-50 px-3 py-1 rounded transition">
              เข้าสู่ระบบ
            </button>`
       }
@@ -653,14 +548,15 @@ function render(): void {
 
   // ── Tab switcher ──
   const tabsHTML = `
-    <div class="grid grid-cols-5 gap-1 mx-3 mt-3">
+    <div class="mx-3 mt-3 flex rounded-lg overflow-hidden border border-slate-200 bg-white shadow-sm">
       ${(Object.entries(TAB_META) as [Tab, { label: string; icon: string }][]).map(([key, meta]) => `
-        <button data-tab="${key}"
-          class="tab-btn flex flex-col items-center gap-1 py-2 rounded-lg transition ${
-            tab === key ? 'bg-blue-700 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}">
-          <span class="text-base leading-none">${meta.icon}</span>
-          <span class="text-[9px] font-medium leading-none">${meta.label}</span>
-        </button>
+        <button
+          data-tab="${key}"
+          class="tab-btn flex-1 py-2 text-xs font-medium transition
+            ${tab === key
+              ? 'bg-blue-700 text-white'
+              : 'text-slate-600 hover:bg-slate-100'}"
+        ><span class="hidden sm:inline">${meta.icon} </span>${meta.label}</button>
       `).join('')}
     </div>
   `
@@ -694,26 +590,8 @@ function render(): void {
       ${field('Project *', projectSelect())}
       ${field('Assign ให้', agentSelect(account.username))}
       ${field('Due Date', `<input id="f-due-date" type="date" class="${inputCls}" />`)}
-      ${field('Task Note', `<textarea id="f-note" rows="4"
+      ${field('Task Note', `<textarea id="f-note" rows="5"
         class="${inputCls} resize-y">${esc(emailBodyPreview)}</textarea>`)}
-      <label class="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer mb-1">
-        <input id="f-teams" type="checkbox" class="rounded" onchange="document.getElementById('teams-fields').style.display=this.checked?'block':'none'" />
-        💻 เพิ่มการประชุมออนไลน์ (Teams) — ใช้เวลา 09:00–10:00 ของวัน Due Date
-      </label>
-      <div id="teams-fields" style="display:none" class="space-y-2 mb-2">
-        <div>
-          <label class="block text-xs font-medium text-slate-600 mb-1">ผู้เข้าร่วม Internal</label>
-          <div class="max-h-28 overflow-y-auto border border-slate-200 rounded-md p-1.5 space-y-0.5">
-            ${state.agents.map(a => `<label class="flex items-center gap-2 text-xs text-slate-700 px-1 py-0.5 hover:bg-slate-50 rounded cursor-pointer">
-              <input type="checkbox" class="att-internal" value="${esc(a.email)}" /> ${esc(a.name)}
-            </label>`).join('')}
-          </div>
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-slate-600 mb-1">Email ภายนอก (คั่นด้วย ,)</label>
-          <input id="f-ext-att" type="text" class="${inputCls}" placeholder="someone@company.com, ..." />
-        </div>
-      </div>
       ${fileField()}
     `
   } else if (tab === 'incident') {
@@ -746,72 +624,35 @@ function render(): void {
         class="${inputCls} resize-y" placeholder="อธิบายวิธีแก้ไขปัญหา..."></textarea>`)}
       ${fileField()}
     `
-  } else if (tab === 'comment') {
-    formHTML = `
-      ${field('เลือก Ticket *', `<select id="f-ticket" class="${inputCls}">
-        <option value="">-- เลือก Ticket ที่จะเพิ่ม Comment --</option>
-        ${state.tickets.map(t => `<option value="${t.id}">${esc(t.TicketNumber || ('#' + t.id))} · ${esc(t.Title)}</option>`).join('')}
-      </select>`)}
-      ${field('ประเภท', `<select id="f-comment-type" class="${inputCls}">
-        <option value="Internal">Internal</option>
-        <option value="External">External</option>
-      </select>`)}
-      ${field('Comment *', `<textarea id="f-comment" rows="5"
-        class="${inputCls} resize-y" placeholder="พิมพ์ comment...">${esc(emailBodyPreview)}</textarea>`)}
-      ${fileField()}
-    `
-  } else if (tab === 'project') {
-    formHTML = `
-      ${field('ชื่อโครงการ *', `<input id="f-title" type="text" required
-        class="${inputCls}" value="${esc(emailSubject)}" />`)}
-      ${field('บริษัท / ลูกค้า', `<input id="f-company" type="text" class="${inputCls}" value="${esc(state.signatureContact?.company ?? '')}" />`)}
-      <div class="grid grid-cols-2 gap-2">
-        <div><label class="block text-xs font-medium text-slate-600 mb-1">กลุ่มโครงการ</label>
-          <select id="f-group" class="${inputCls}">
-            ${['Internal', 'External', 'R&D', 'Maintenance', 'อื่นๆ'].map(g => `<option>${g}</option>`).join('')}
-          </select>
-        </div>
-        <div><label class="block text-xs font-medium text-slate-600 mb-1">สถานะ</label>
-          <select id="f-status" class="${inputCls}">
-            ${['Planning', 'Active', 'On Hold', 'Completed', 'Cancelled'].map(s => `<option>${s}</option>`).join('')}
-          </select>
-        </div>
-      </div>
-      <div class="grid grid-cols-2 gap-2">
-        <div><label class="block text-xs font-medium text-slate-600 mb-1">วันที่เริ่ม</label>
-          <input id="f-start" type="date" class="${inputCls}" /></div>
-        <div><label class="block text-xs font-medium text-slate-600 mb-1">วันสิ้นสุด</label>
-          <input id="f-end" type="date" class="${inputCls}" /></div>
-      </div>
-      ${field('รายละเอียด', `<textarea id="f-description" rows="4"
-        class="${inputCls} resize-y">${esc(emailBodyPreview)}</textarea>`)}
-      ${fileField()}
-    `
   }
 
-  const submitLabel = tab === 'comment' ? 'เพิ่ม Comment'
-    : tab === 'project' ? 'สร้างโครงการ'
-    : tab === 'incident' ? 'แจ้ง Incident'
-    : tab === 'task' ? 'สร้าง Task' : 'สร้าง Ticket'
-
-  app.innerHTML = `
-    <div class="flex flex-col h-screen bg-slate-50">
-      ${headerHTML}
-      <div class="flex-1 overflow-y-auto">
-        ${emailInfoHTML}
-        ${sigCardHTML}
-        ${tabsHTML}
-        <div class="mx-3 mt-3 space-y-3 pb-3">
-          ${formHTML}
-        </div>
+  // ── Account pill ──
+  const accountHTML = `
+    <div class="mx-3 mt-3 flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+      <div class="w-6 h-6 rounded-full bg-green-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+        ${(account.name ?? account.username).charAt(0).toUpperCase()}
       </div>
-      <div class="border-t border-slate-200 bg-white px-3 py-2.5 flex-shrink-0">
-        <button id="submit-btn"
-          class="w-full bg-blue-700 hover:bg-blue-600 active:bg-blue-800 text-white text-sm font-semibold py-2.5 rounded-lg shadow transition">
-          ${submitLabel}
-        </button>
+      <div class="min-w-0">
+        <div class="text-xs font-semibold text-slate-700 truncate">${esc(account.name ?? '')}</div>
+        <div class="text-xs text-slate-400 truncate">${esc(account.username)}</div>
       </div>
     </div>
+  `
+
+  app.innerHTML = `
+    ${headerHTML}
+    ${accountHTML}
+    ${emailInfoHTML}
+    ${sigCardHTML}
+    ${tabsHTML}
+    <div class="mx-3 mt-3 space-y-3">
+      ${formHTML}
+      <button id="submit-btn"
+        class="w-full bg-blue-700 hover:bg-blue-600 active:bg-blue-800 text-white text-sm font-semibold py-2.5 rounded-lg shadow transition mt-1">
+        บันทึก
+      </button>
+    </div>
+    <div class="h-6"></div>
   `
 
   // ── Event listeners ──
@@ -869,8 +710,6 @@ function render(): void {
       }
     })
   })
-
-  restoreForm()  // re-apply typed values after re-render
 }
 
 function addDroppedFiles(files: File[]): void {
