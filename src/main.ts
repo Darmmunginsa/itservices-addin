@@ -9,7 +9,7 @@ const CLIENT_ID = '0bab07cf-65e6-487c-89af-c917fc1a5a13'
 const TENANT_ID = 'd569b991-89fc-4a62-9df5-eb361abcef40'
 const SHAREPOINT_URL = 'https://rpaexpert.sharepoint.com/sites/iTServicesCo.Ltd'
 const SP_SCOPE = 'https://rpaexpert.sharepoint.com/.default'
-const GRAPH_SCOPES = ['https://graph.microsoft.com/Calendars.ReadWrite']
+const GRAPH_SCOPES = ['https://graph.microsoft.com/Calendars.ReadWrite', 'https://graph.microsoft.com/Mail.Send']
 
 // ─── MSAL setup ───────────────────────────────────────────────────────────────
 const msalInstance = new PublicClientApplication({
@@ -207,6 +207,69 @@ async function spCreate(listTitle: string, body: Record<string, unknown>): Promi
   return data.Id
 }
 
+// ─── Email notifications (ทำงานเหมือน webapp: HD_EmailTemplates + Graph sendMail) ──
+interface EmailTemplate { EventKey: string; Subject: string; Body: string; IsEnabled: boolean }
+let _tplCache: EmailTemplate[] | null = null
+const DEFAULT_SENDER = 'support@itservices.co.th'
+
+async function getEmailTemplates(): Promise<EmailTemplate[]> {
+  if (_tplCache) return _tplCache
+  try {
+    const token = await getToken()
+    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('HD_EmailTemplates')/items?$select=EventKey,Subject,Body,IsEnabled&$top=50`
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata' } })
+    if (!res.ok) return []
+    const data = await res.json() as { value: EmailTemplate[] }
+    _tplCache = data.value
+    return _tplCache
+  } catch { return [] }
+}
+
+async function getSenderAddress(): Promise<string> {
+  try {
+    const token = await getToken()
+    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('HD_Options')/items?$select=Title,Category&$filter=Category eq 'EmailConfig'&$top=1`
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata' } })
+    if (!res.ok) return DEFAULT_SENDER
+    const data = await res.json() as { value: { Title: string }[] }
+    return data.value[0]?.Title?.trim() || DEFAULT_SENDER
+  } catch { return DEFAULT_SENDER }
+}
+
+function renderTpl(tpl: string, vars: Record<string, string>): string {
+  return tpl.replace(/\{\{(\w+)\}\}/g, (_, k) => vars[k] ?? `{{${k}}}`)
+}
+
+async function sendTemplateEmail(eventKey: string, vars: Record<string, string>, to: string[], cc: string[] = []): Promise<void> {
+  try {
+    const templates = await getEmailTemplates()
+    const tpl = templates.find(t => t.EventKey === eventKey && t.IsEnabled)
+    if (!tpl) return
+    const subject = renderTpl(tpl.Subject || '', vars)
+    const body = renderTpl(tpl.Body || '', vars)
+    if (!subject || !body) return
+    const norm = (e: string) => e.trim().toLowerCase()
+    const toArr = [...new Map(to.filter(Boolean).map(e => [norm(e), e])).values()]
+    if (toArr.length === 0) return
+    const toSet = new Set(toArr.map(norm))
+    const ccArr = [...new Map(cc.filter(Boolean).map(e => [norm(e), e])).values()].filter(e => !toSet.has(norm(e)))
+    const from = await getSenderAddress()
+    const token = await getGraphToken()
+    const message: Record<string, unknown> = {
+      subject,
+      body: { contentType: 'HTML', content: body },
+      toRecipients: toArr.map(a => ({ emailAddress: { address: a } })),
+    }
+    if (ccArr.length) message.ccRecipients = ccArr.map(a => ({ emailAddress: { address: a } }))
+    if (from) message.from = { emailAddress: { address: from } }
+    await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, saveToSentItems: true }),
+    })
+  } catch { /* email fail = non-critical */ }
+}
+
 async function uploadEmailAttachments(listTitle: string, itemId: number): Promise<void> {
   const checked = document.querySelectorAll<HTMLInputElement>('.email-att-cb:checked')
   if (checked.length === 0) return
@@ -373,6 +436,13 @@ function todayISO(): string {
   return new Date().toISOString().split('T')[0]
 }
 
+// ─── Ticket number (รูปแบบเดียวกับ webapp) ──────────────────────────────────────
+function genTicketNumber(): string {
+  const now = new Date()
+  const ymd = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+  return `HD-${ymd}-${Math.floor(Math.random() * 900 + 100)}`
+}
+
 // ─── Submit handlers ──────────────────────────────────────────────────────────
 async function handleSubmit(): Promise<void> {
   if (!state.account) {
@@ -392,8 +462,10 @@ async function handleSubmit(): Promise<void> {
 
       const assignedEmail = (document.getElementById('f-assigned-email') as HTMLSelectElement).value
       const assignedAgent = state.agents.find(a => a.email === assignedEmail)
+      const ticketNum = genTicketNumber()
       const ticketId = await spCreate('HD_Tickets', {
         Title: title,
+        TicketNumber: ticketNum,
         Description: description,
         Priority: priority,
         CustomerEmail: customerEmail,
@@ -405,6 +477,17 @@ async function handleSubmit(): Promise<void> {
       if (state.droppedFiles.length > 0) await spUploadFileList('HD_Tickets', ticketId, state.droppedFiles)
       await uploadEmailAttachments('HD_Tickets', ticketId)
       state.droppedFiles = []
+      // Email: 1 ฉบับ — To = ลูกค้า, CC = agent + ผู้แจ้ง (เหมือน webapp)
+      await sendTemplateEmail('ticket_created', {
+        ticket_number: ticketNum,
+        ticket_title: title,
+        priority,
+        category: '-',
+        description: (description || '-').replace(/\n/g, '<br>'),
+        customer_name: state.emailSenderName || customerEmail,
+        assigned_name: assignedAgent?.name ?? state.account?.name ?? '-',
+        link: 'https://itservices.co.th/helpdesk/',
+      }, [customerEmail], [assignedEmail, state.account.username])
       showToast('สร้าง Ticket สำเร็จ!')
 
     } else if (state.tab === 'task') {
@@ -431,6 +514,15 @@ async function handleSubmit(): Promise<void> {
       if (state.droppedFiles.length > 0) await spUploadFileList('PM_Tasks', taskId, state.droppedFiles)
       await uploadEmailAttachments('PM_Tasks', taskId)
       state.droppedFiles = []
+
+      // Email: แจ้ง agent + ผู้แจ้ง (เหมือน webapp)
+      await sendTemplateEmail('task_assigned', {
+        task_title: title,
+        assigned_name: assignedAgent?.name ?? state.account.name ?? '-',
+        due_date: dueDate || '-',
+        task_note: (note || '-').replace(/\n/g, '<br>'),
+        link: 'https://itservices.co.th/helpdesk/',
+      }, [assignedEmail, state.account.username])
 
       // เพิ่มการประชุม Teams / Calendar (ถ้าติ๊ก)
       const isMeeting = (document.getElementById('f-teams') as HTMLInputElement)?.checked
@@ -478,6 +570,15 @@ async function handleSubmit(): Promise<void> {
       if (state.droppedFiles.length > 0) await spUploadFileList('PM_Incidents', incidentId, state.droppedFiles)
       await uploadEmailAttachments('PM_Incidents', incidentId)
       state.droppedFiles = []
+      // Email: แจ้ง Assigned (เหมือน webapp)
+      await sendTemplateEmail('incident_created', {
+        incident_title: title,
+        severity,
+        incident_status: status,
+        assigned_name: assignedAgent?.name ?? state.account.name ?? '-',
+        description: (description || '-').replace(/\n/g, '<br>'),
+        link: 'https://itservices.co.th/helpdesk/',
+      }, [assignedEmail])
       showToast('สร้าง Incident สำเร็จ!')
 
     } else if (state.tab === 'comment') {
@@ -498,6 +599,28 @@ async function handleSubmit(): Promise<void> {
       if (state.droppedFiles.length > 0) await spUploadFileList('HD_Tickets', ticketId, state.droppedFiles)
       await uploadEmailAttachments('HD_Tickets', ticketId)
       state.droppedFiles = []
+      // Email: แจ้งภายใน (agent + ผู้แจ้ง) ยกเว้นคนกดเอง — ดึงข้อมูล ticket ก่อน
+      try {
+        const token = await getToken()
+        const tUrl = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('HD_Tickets')/items(${ticketId})?$select=TicketNumber,Title,AssignedEmail,Author/EMail&$expand=Author`
+        const tRes = await fetch(tUrl, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata' } })
+        if (tRes.ok) {
+          const t = await tRes.json() as { TicketNumber?: string; Title?: string; AssignedEmail?: string; Author?: { EMail?: string } }
+          const actor = state.account.username.toLowerCase()
+          const internal = [...new Set([t.AssignedEmail, t.Author?.EMail].filter(Boolean) as string[])]
+            .filter(e => e.toLowerCase() !== actor)
+          if (internal.length) {
+            await sendTemplateEmail('comment_added', {
+              ticket_number: t.TicketNumber || `#${ticketId}`,
+              ticket_title: t.Title || '-',
+              customer_name: '-',
+              assigned_name: state.account.name ?? state.account.username,
+              comment_text: commentText.slice(0, 200).replace(/\n/g, '<br>'),
+              link: 'https://itservices.co.th/helpdesk/',
+            }, internal.slice(0, 1), internal.slice(1))
+          }
+        }
+      } catch { /* non-critical */ }
       showToast('เพิ่ม Comment สำเร็จ!')
 
     } else if (state.tab === 'project') {
