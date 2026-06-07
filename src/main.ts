@@ -642,7 +642,7 @@ async function handleSubmit(): Promise<void> {
         EndDate: endDate || null,
         Status: status,
         CreatedByEmail: state.account.username,
-        Description: description || undefined,
+        Comment: description || undefined,
       })
       if (state.droppedFiles.length > 0) await spUploadFileList('PM_Projects', newProjectId, state.droppedFiles)
       await uploadEmailAttachments('PM_Projects', newProjectId)
