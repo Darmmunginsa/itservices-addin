@@ -270,6 +270,24 @@ async function sendTemplateEmail(eventKey: string, vars: Record<string, string>,
   } catch { /* email fail = non-critical */ }
 }
 
+// In-app notification (เหมือน webapp) — เขียนลง HD_Notifications, ตัดคนกดเองออก
+async function createNotification(p: { recipients: string[]; title: string; message: string; linkPath: string; eventType: string }): Promise<void> {
+  const norm = (e: string) => e.trim().toLowerCase()
+  const actor = norm(state.account?.username ?? '')
+  const seen = new Set<string>()
+  const to = p.recipients.filter(Boolean).filter(e => { const k = norm(e); if (!k || k === actor || seen.has(k)) return false; seen.add(k); return true })
+  if (to.length === 0) return
+  try {
+    const token = await getToken()
+    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('HD_Notifications')/items`
+    await Promise.all(to.map(email => fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata', 'Content-Type': 'application/json;odata=nometadata' },
+      body: JSON.stringify({ Title: p.title.slice(0, 255), RecipientEmail: email, EventType: p.eventType, Message: p.message, LinkPath: p.linkPath, IsRead: false }),
+    })))
+  } catch { /* non-critical */ }
+}
+
 async function uploadEmailAttachments(listTitle: string, itemId: number): Promise<void> {
   const checked = document.querySelectorAll<HTMLInputElement>('.email-att-cb:checked')
   if (checked.length === 0) return
@@ -515,14 +533,14 @@ async function handleSubmit(): Promise<void> {
       await uploadEmailAttachments('PM_Tasks', taskId)
       state.droppedFiles = []
 
-      // Email: แจ้ง agent + ผู้แจ้ง (เหมือน webapp)
-      await sendTemplateEmail('task_assigned', {
-        task_title: title,
-        assigned_name: assignedAgent?.name ?? state.account.name ?? '-',
-        due_date: dueDate || '-',
-        task_note: (note || '-').replace(/\n/g, '<br>'),
-        link: 'https://itservices.co.th/helpdesk/',
-      }, [assignedEmail, state.account.username])
+      // แจ้งเตือน agent ที่ถูก assign (in-app เหมือน webapp) — ยกเว้นคนสร้างเอง
+      await createNotification({
+        recipients: [assignedEmail],
+        title: `📋 ได้รับมอบหมาย Task: ${title}`,
+        message: note || (dueDate ? `กำหนดส่ง ${dueDate}` : 'มี Task ใหม่'),
+        linkPath: projectId ? `/projects/${projectId}` : '/my-work',
+        eventType: 'task_assigned',
+      })
 
       // เพิ่มการประชุม Teams / Calendar (ถ้าติ๊ก)
       const isMeeting = (document.getElementById('f-teams') as HTMLInputElement)?.checked
@@ -570,15 +588,14 @@ async function handleSubmit(): Promise<void> {
       if (state.droppedFiles.length > 0) await spUploadFileList('PM_Incidents', incidentId, state.droppedFiles)
       await uploadEmailAttachments('PM_Incidents', incidentId)
       state.droppedFiles = []
-      // Email: แจ้ง Assigned (เหมือน webapp)
-      await sendTemplateEmail('incident_created', {
-        incident_title: title,
-        severity,
-        incident_status: status,
-        assigned_name: assignedAgent?.name ?? state.account.name ?? '-',
-        description: (description || '-').replace(/\n/g, '<br>'),
-        link: 'https://itservices.co.th/helpdesk/',
-      }, [assignedEmail])
+      // แจ้งเตือน Assigned (in-app เหมือน webapp) — ยกเว้นคนสร้างเอง
+      await createNotification({
+        recipients: [assignedEmail],
+        title: `🚨 ได้รับมอบหมาย Incident: ${title}`,
+        message: `ความรุนแรง ${severity}${description ? ' — ' + description.slice(0, 120) : ''}`,
+        linkPath: projectId ? `/projects/${projectId}` : '/my-work',
+        eventType: 'incident_created',
+      })
       showToast('สร้าง Incident สำเร็จ!')
 
     } else if (state.tab === 'comment') {
@@ -610,14 +627,13 @@ async function handleSubmit(): Promise<void> {
           const internal = [...new Set([t.AssignedEmail, t.Author?.EMail].filter(Boolean) as string[])]
             .filter(e => e.toLowerCase() !== actor)
           if (internal.length) {
-            await sendTemplateEmail('comment_added', {
-              ticket_number: t.TicketNumber || `#${ticketId}`,
-              ticket_title: t.Title || '-',
-              customer_name: '-',
-              assigned_name: state.account.name ?? state.account.username,
-              comment_text: commentText.slice(0, 200).replace(/\n/g, '<br>'),
-              link: 'https://itservices.co.th/helpdesk/',
-            }, internal.slice(0, 1), internal.slice(1))
+            await createNotification({
+              recipients: internal,
+              title: `💬 ${state.account?.name ?? 'มีคน'} คอมเมนต์ใน ${t.TicketNumber || ('#' + ticketId)}`,
+              message: commentText.slice(0, 200),
+              linkPath: `/tickets/${ticketId}`,
+              eventType: 'comment_added',
+            })
           }
         }
       } catch { /* non-critical */ }
