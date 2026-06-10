@@ -56,6 +56,7 @@ interface AppState {
   droppedFiles: File[]
   tickets: TicketRef[]
   contactEmails: string[]    // อีเมลลูกค้าที่มีในระบบแล้ว (lowercase) — กันเพิ่มซ้ำ
+  emailCc: string[]          // ผู้รับในเมลต้นทาง (To+CC) — ใช้ prefill ช่อง CC
 }
 
 const state: AppState = {
@@ -73,6 +74,7 @@ const state: AppState = {
   droppedFiles: [],
   tickets: [],
   contactEmails: [],
+  emailCc: [],
 }
 
 // ─── MSAL helpers ─────────────────────────────────────────────────────────────
@@ -501,8 +503,10 @@ async function handleSubmit(): Promise<void> {
       const description = (document.getElementById('f-description') as HTMLTextAreaElement).value.trim()
       const priority = (document.getElementById('f-priority') as HTMLSelectElement).value
       const customerEmail = (document.getElementById('f-customer-email') as HTMLInputElement).value.trim()
-      const ccEmails = ((document.getElementById('f-cc') as HTMLInputElement)?.value || '')
-        .split(/[,;\s]+/).map(s => s.trim()).filter(Boolean)
+      const ccEnabled = (document.getElementById('f-cc-enable') as HTMLInputElement)?.checked ?? true
+      const ccEmails = ccEnabled
+        ? ((document.getElementById('f-cc') as HTMLInputElement)?.value || '').split(/[,;\s]+/).map(s => s.trim()).filter(Boolean)
+        : []
 
       const assignedEmail = (document.getElementById('f-assigned-email') as HTMLSelectElement).value
       const assignedAgent = state.agents.find(a => a.email === assignedEmail)
@@ -853,8 +857,11 @@ function render(): void {
       ${field('Customer Email', `<input id="f-customer-email" type="email"
         class="${inputCls}"
         value="${esc(emailSenderEmail)}" />`)}
-      ${field('CC (อีเมลที่ให้รับรู้ — คั่นด้วย ,)', `<input id="f-cc" type="text"
-        class="${inputCls}" placeholder="someone@company.com, boss@company.com" />`)}
+      ${field('CC — ให้ผู้ที่อยู่ในเมลนี้รับรู้', `
+        <label class="flex items-center gap-2 text-xs text-slate-600 mb-1.5 cursor-pointer">
+          <input id="f-cc-enable" type="checkbox" ${state.emailCc.length ? 'checked' : ''} /> แนบผู้รับในเมลนี้เป็น CC อัตโนมัติ
+        </label>
+        <input id="f-cc" type="text" class="${inputCls}" value="${esc(state.emailCc.join(', '))}" placeholder="someone@company.com, boss@company.com" />`)}
       ${field('Assign ให้ Agent', agentSelect(account.username))}
       ${fileField()}
     `
@@ -1203,6 +1210,14 @@ async function init(): Promise<void> {
             state.emailSenderName = sender.displayName ?? ''
             state.emailSenderEmail = sender.emailAddress ?? ''
           }
+
+          // ผู้รับในเมล (To + CC) → ใช้ prefill ช่อง CC (ตัดผู้ส่ง + ตัวเราออก)
+          const me = (state.account?.username ?? '').toLowerCase()
+          const fromLc = (sender?.emailAddress ?? '').toLowerCase()
+          const recips = [...(item.to ?? []), ...(item.cc ?? [])]
+            .map(r => r.emailAddress).filter(Boolean)
+          state.emailCc = [...new Set(recips.map(e => e.toLowerCase()))]
+            .filter(e => e !== me && e !== fromLc)
 
           // Email attachments
           const attachments = item.attachments ?? []
