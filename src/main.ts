@@ -55,6 +55,7 @@ interface AppState {
   signatureContact: SignatureContact | null
   droppedFiles: File[]
   tickets: TicketRef[]
+  contactEmails: string[]    // อีเมลลูกค้าที่มีในระบบแล้ว (lowercase) — กันเพิ่มซ้ำ
 }
 
 const state: AppState = {
@@ -71,6 +72,7 @@ const state: AppState = {
   signatureContact: null,
   droppedFiles: [],
   tickets: [],
+  contactEmails: [],
 }
 
 // ─── MSAL helpers ─────────────────────────────────────────────────────────────
@@ -160,6 +162,18 @@ async function fetchTickets(): Promise<void> {
   } catch { /* silent */ }
 }
 
+async function fetchContacts(): Promise<void> {
+  try {
+    const token = await getToken()
+    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('HD_Contracts')/items?$select=CustomerEmail&$top=2000`
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata' } })
+    if (res.ok) {
+      const data = await res.json() as { value: { CustomerEmail?: string }[] }
+      state.contactEmails = data.value.map(c => (c.CustomerEmail || '').trim().toLowerCase()).filter(Boolean)
+    }
+  } catch { /* silent */ }
+}
+
 async function login(): Promise<void> {
   const btn = document.getElementById('btn-login-main') as HTMLButtonElement | null
   const btn2 = document.getElementById('btn-login') as HTMLButtonElement | null
@@ -168,7 +182,7 @@ async function login(): Promise<void> {
   try {
     const result = await msalInstance.loginPopup({ scopes: [SP_SCOPE] })
     state.account = result.account
-    await Promise.all([fetchProjects(), fetchAgents(), fetchTickets()])
+    await Promise.all([fetchProjects(), fetchAgents(), fetchTickets(), fetchContacts()])
     render()
   } catch {
     if (btn) { btn.disabled = false; btn.textContent = 'เข้าสู่ระบบ' }
@@ -429,6 +443,12 @@ function parseSignature(sigText: string): SignatureContact | null {
 async function importAsCustomer(): Promise<void> {
   const sig = state.signatureContact
   if (!sig) return
+  // กันเพิ่มซ้ำ — ถ้ามีในระบบแล้วไม่ต้องส่ง
+  const emailLc = (state.emailSenderEmail || '').toLowerCase()
+  if (emailLc && state.contactEmails.includes(emailLc)) {
+    showToast('ลูกค้านี้มีในระบบแล้ว', 'success')
+    state.signatureContact = null; render(); return
+  }
   const btn = document.getElementById('btn-import-customer') as HTMLButtonElement | null
   if (btn) { btn.disabled = true; btn.textContent = 'กำลังบันทึก…' }
   try {
@@ -439,6 +459,7 @@ async function importAsCustomer(): Promise<void> {
       Company: sig.company || undefined,
       Status: 'Active',
     })
+    if (emailLc) state.contactEmails.push(emailLc)
     showToast('เพิ่มลูกค้าสำเร็จ!')
     state.signatureContact = null
     render()
@@ -462,11 +483,14 @@ function genTicketNumber(): string {
 }
 
 // ─── Submit handlers ──────────────────────────────────────────────────────────
+let _submitting = false
 async function handleSubmit(): Promise<void> {
   if (!state.account) {
     showToast('กรุณาเข้าสู่ระบบก่อน', 'error')
     return
   }
+  if (_submitting) return            // กันกดซ้ำระหว่างกำลังส่ง
+  _submitting = true
 
   const btn = document.getElementById('submit-btn') as HTMLButtonElement | null
   if (btn) { btn.disabled = true; btn.textContent = 'กำลังบันทึก…' }
@@ -477,6 +501,8 @@ async function handleSubmit(): Promise<void> {
       const description = (document.getElementById('f-description') as HTMLTextAreaElement).value.trim()
       const priority = (document.getElementById('f-priority') as HTMLSelectElement).value
       const customerEmail = (document.getElementById('f-customer-email') as HTMLInputElement).value.trim()
+      const ccEmails = ((document.getElementById('f-cc') as HTMLInputElement)?.value || '')
+        .split(/[,;\s]+/).map(s => s.trim()).filter(Boolean)
 
       const assignedEmail = (document.getElementById('f-assigned-email') as HTMLSelectElement).value
       const assignedAgent = state.agents.find(a => a.email === assignedEmail)
@@ -505,7 +531,7 @@ async function handleSubmit(): Promise<void> {
         customer_name: state.emailSenderName || customerEmail,
         assigned_name: assignedAgent?.name ?? state.account?.name ?? '-',
         link: 'https://itservices.co.th/helpdesk/',
-      }, [customerEmail], [assignedEmail, state.account.username])
+      }, [customerEmail], [assignedEmail, state.account.username, ...ccEmails])
       showToast('สร้าง Ticket สำเร็จ!')
 
     } else if (state.tab === 'task') {
@@ -669,6 +695,7 @@ async function handleSubmit(): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err)
     showToast(`เกิดข้อผิดพลาด: ${msg}`, 'error')
   } finally {
+    _submitting = false
     if (btn) { btn.disabled = false; btn.textContent = 'บันทึก' }
   }
 }
@@ -683,7 +710,7 @@ const TAB_META: Record<Tab, { label: string; icon: string }> = {
 }
 
 // ─── Render ───────────────────────────────────────────────────────────────────
-const FORM_IDS = ['f-title','f-description','f-priority','f-customer-email','f-assigned-email','f-project','f-due-date','f-note','f-severity','f-status','f-incident-date','f-resolution','f-ticket','f-comment','f-comment-type','f-company','f-group','f-start','f-end','f-ext-att']
+const FORM_IDS = ['f-title','f-description','f-priority','f-customer-email','f-cc','f-assigned-email','f-project','f-due-date','f-note','f-severity','f-status','f-incident-date','f-resolution','f-ticket','f-comment','f-comment-type','f-company','f-group','f-start','f-end','f-ext-att']
 let formCache: Record<string, string | boolean> = {}
 function captureForm(): void {
   for (const id of FORM_IDS) {
@@ -772,6 +799,7 @@ function render(): void {
 
   // ── Signature contact card ──
   const sig = state.signatureContact
+  const custExists = !!emailSenderEmail && state.contactEmails.includes(emailSenderEmail.toLowerCase())
   const sigCardHTML = sig
     ? `<div class="mx-3 mt-3 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2.5 text-xs text-slate-700">
          <div class="flex items-center justify-between mb-2">
@@ -783,10 +811,12 @@ function render(): void {
            ${emailSenderEmail ? `<div><span class="text-slate-400">Email:</span> ${esc(emailSenderEmail)}</div>` : ''}
            ${sig.phone        ? `<div><span class="text-slate-400">โทร:</span> ${esc(sig.phone)}</div>` : ''}
          </div>
-         <button id="btn-import-customer"
-           class="w-full bg-orange-500 hover:bg-orange-400 text-white text-xs font-semibold py-1.5 rounded-md transition">
-           + เพิ่มเป็นลูกค้า
-         </button>
+         ${custExists
+           ? `<div class="w-full bg-green-100 text-green-700 text-xs font-semibold py-1.5 rounded-md text-center">✓ ลูกค้านี้มีในระบบแล้ว</div>`
+           : `<button id="btn-import-customer"
+                class="w-full bg-orange-500 hover:bg-orange-400 text-white text-xs font-semibold py-1.5 rounded-md transition">
+                + เพิ่มเป็นลูกค้า
+              </button>`}
        </div>`
     : ''
 
@@ -823,6 +853,8 @@ function render(): void {
       ${field('Customer Email', `<input id="f-customer-email" type="email"
         class="${inputCls}"
         value="${esc(emailSenderEmail)}" />`)}
+      ${field('CC (อีเมลที่ให้รับรู้ — คั่นด้วย ,)', `<input id="f-cc" type="text"
+        class="${inputCls}" placeholder="someone@company.com, boss@company.com" />`)}
       ${field('Assign ให้ Agent', agentSelect(account.username))}
       ${fileField()}
     `
@@ -1151,7 +1183,7 @@ async function init(): Promise<void> {
     // Try silent token to verify it's still valid
     try {
       await msalInstance.acquireTokenSilent({ scopes: [SP_SCOPE], account: accounts[0] })
-      await Promise.all([fetchProjects(), fetchAgents(), fetchTickets()])
+      await Promise.all([fetchProjects(), fetchAgents(), fetchTickets(), fetchContacts()])
     } catch {
       state.account = null
     }
