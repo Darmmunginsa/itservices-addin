@@ -51,7 +51,7 @@ interface AppState {
   loading: boolean
   projects: Project[]
   agents: Agent[]
-  emailAttachments: { id: string; name: string; size: number }[]
+  emailAttachments: { id: string; name: string; size: number; isItem: boolean }[]
   signatureContact: SignatureContact | null
   droppedFiles: File[]
   tickets: TicketRef[]
@@ -314,25 +314,35 @@ async function uploadEmailAttachments(listTitle: string, itemId: number): Promis
     const attId = cb.dataset['attId']!
     const attName = cb.dataset['attName']!
 
-    // Get attachment content from Outlook
-    const content = await new Promise<string>((resolve, reject) => {
-      Office.context.mailbox.item!.getAttachmentContentAsync(attId, {}, result => {
-        if (result.status === Office.AsyncResultStatus.Succeeded) resolve(result.value.content)
-        else reject(new Error(result.error.message))
+    // Get attachment content from Outlook (file = base64, item = eml string)
+    const result = await new Promise<Office.AsyncResult<Office.AttachmentContent>>((resolve, reject) => {
+      Office.context.mailbox.item!.getAttachmentContentAsync(attId, {}, r => {
+        if (r.status === Office.AsyncResultStatus.Succeeded) resolve(r)
+        else reject(new Error(r.error.message))
       })
     })
+    const { content, format } = result.value
 
-    // Decode base64 → ArrayBuffer
-    const binary = atob(content)
-    const bytes = new Uint8Array(binary.length)
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    let bytes: Uint8Array
+    if (format === Office.MailboxEnums.AttachmentContentFormat.Base64) {
+      const binary = atob(content)
+      bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    } else if (format === Office.MailboxEnums.AttachmentContentFormat.Eml
+      || format === Office.MailboxEnums.AttachmentContentFormat.ICalendar) {
+      // อีเมลที่แนบมา → content เป็นสตริง MIME (.eml) / .ics — เก็บเป็น UTF-8
+      bytes = new TextEncoder().encode(content)
+    } else {
+      // Url (cloud attachment) ฯลฯ — ข้าม
+      continue
+    }
 
     const fileName = encodeURIComponent(attName)
     const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items(${itemId})/AttachmentFiles/add(FileName='${fileName}')`
     const res = await fetch(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata', 'Content-Type': 'application/octet-stream' },
-      body: bytes.buffer,
+      body: bytes.buffer as ArrayBuffer,
     })
     if (!res.ok) throw new Error(`Upload ${attName} failed`)
   }
@@ -1171,8 +1181,8 @@ function fileField(): string {
         <p class="text-xs text-slate-500">📎 ไฟล์แนบจาก Email:</p>
         ${emailAtts.map(a => `
           <label class="flex items-center gap-2 text-xs text-slate-700 cursor-pointer hover:bg-slate-50 rounded px-1 py-0.5">
-            <input type="checkbox" class="email-att-cb" data-att-id="${esc(a.id)}" data-att-name="${esc(a.name)}" checked />
-            <span class="flex-1 truncate">${esc(a.name)}</span>
+            <input type="checkbox" class="email-att-cb" data-att-id="${esc(a.id)}" data-att-name="${esc(a.name)}" data-att-item="${a.isItem ? '1' : '0'}" checked />
+            <span class="flex-1 truncate">${a.isItem ? '📧 ' : ''}${esc(a.name)}</span>
             <span class="text-slate-400 flex-shrink-0">${formatBytes(a.size)}</span>
           </label>`).join('')}
       </div>`
@@ -1295,11 +1305,19 @@ async function init(): Promise<void> {
           state.emailCc = [...new Set(recips.map(e => e.toLowerCase()))]
             .filter(e => e !== me && e !== fromLc)
 
-          // Email attachments
+          // Email attachments — รวมทั้งไฟล์ (File) และอีเมลที่แนบมา (Item → .eml)
           const attachments = item.attachments ?? []
           state.emailAttachments = attachments
-            .filter(a => a.attachmentType === Office.MailboxEnums.AttachmentType.File)
-            .map(a => ({ id: a.id, name: a.name, size: a.size }))
+            .filter(a => a.attachmentType === Office.MailboxEnums.AttachmentType.File
+              || a.attachmentType === Office.MailboxEnums.AttachmentType.Item)
+            .map(a => ({
+              id: a.id,
+              name: a.attachmentType === Office.MailboxEnums.AttachmentType.Item
+                ? `${(a.name || 'email').replace(/\.eml$/i, '')}.eml`
+                : a.name,
+              size: a.size,
+              isItem: a.attachmentType === Office.MailboxEnums.AttachmentType.Item,
+            }))
 
           // Body preview (async) — recursive DOM walker, handles tables natively
           item.body.getAsync(Office.CoercionType.Html, { asyncContext: {} }, result => {
