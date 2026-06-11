@@ -338,6 +338,39 @@ async function uploadEmailAttachments(listTitle: string, itemId: number): Promis
   }
 }
 
+// แนบอีเมลต้นฉบับเป็นไฟล์ .eml (ใช้ callback token + Outlook REST $value — ไม่ต้องขอ Graph scope เพิ่ม)
+async function uploadOriginalEmail(listTitle: string, itemId: number): Promise<void> {
+  const cb = document.getElementById('f-attach-eml') as HTMLInputElement | null
+  if (!cb?.checked) return
+  const mbItem = Office.context.mailbox.item
+  if (!mbItem) return
+
+  // ดึง MIME (.eml) ของอีเมลฉบับนี้
+  const mime = await new Promise<ArrayBuffer>((resolve, reject) => {
+    Office.context.mailbox.getCallbackTokenAsync({ isRest: true }, async tok => {
+      if (tok.status !== Office.AsyncResultStatus.Succeeded) { reject(new Error('getCallbackToken failed')); return }
+      try {
+        const restId = Office.context.mailbox.convertToRestId(mbItem.itemId, Office.MailboxEnums.RestVersion.v2_0)
+        const url = `${Office.context.mailbox.restUrl}/v2.0/me/messages/${restId}/$value`
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${tok.value}` } })
+        if (!res.ok) { reject(new Error(`fetch MIME failed: ${res.status}`)); return }
+        resolve(await res.arrayBuffer())
+      } catch (e) { reject(e instanceof Error ? e : new Error(String(e))) }
+    })
+  })
+
+  // ตั้งชื่อไฟล์จาก subject (sanitize อักขระต้องห้ามใน SharePoint)
+  const subject = (mbItem.subject || 'email').replace(/[\\/:*?"<>|#%&{}~]/g, '_').slice(0, 100).trim() || 'email'
+  const token = await getToken()
+  const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items(${itemId})/AttachmentFiles/add(FileName='${encodeURIComponent(subject + '.eml')}')`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata', 'Content-Type': 'application/octet-stream' },
+    body: mime,
+  })
+  if (!res.ok) throw new Error('แนบอีเมลต้นฉบับไม่สำเร็จ')
+}
+
 async function spUploadFileList(listTitle: string, itemId: number, files: File[]): Promise<void> {
   const token = await getToken()
   for (const file of files) {
@@ -524,6 +557,7 @@ async function handleSubmit(): Promise<void> {
       })
       if (state.droppedFiles.length > 0) await spUploadFileList('HD_Tickets', ticketId, state.droppedFiles)
       await uploadEmailAttachments('HD_Tickets', ticketId)
+      await uploadOriginalEmail('HD_Tickets', ticketId)
       state.droppedFiles = []
       // Email: 1 ฉบับ — To = ลูกค้า, CC = agent + ผู้แจ้ง (เหมือน webapp)
       await sendTemplateEmail('ticket_created', {
@@ -561,6 +595,7 @@ async function handleSubmit(): Promise<void> {
       })
       if (state.droppedFiles.length > 0) await spUploadFileList('PM_Tasks', taskId, state.droppedFiles)
       await uploadEmailAttachments('PM_Tasks', taskId)
+      await uploadOriginalEmail('PM_Tasks', taskId)
       state.droppedFiles = []
 
       // แจ้งเตือน agent ที่ถูก assign (in-app เหมือน webapp) — ยกเว้นคนสร้างเอง
@@ -617,6 +652,7 @@ async function handleSubmit(): Promise<void> {
       })
       if (state.droppedFiles.length > 0) await spUploadFileList('PM_Incidents', incidentId, state.droppedFiles)
       await uploadEmailAttachments('PM_Incidents', incidentId)
+      await uploadOriginalEmail('PM_Incidents', incidentId)
       state.droppedFiles = []
       // แจ้งเตือน Assigned (in-app เหมือน webapp) — ยกเว้นคนสร้างเอง
       await createNotification({
@@ -645,6 +681,7 @@ async function handleSubmit(): Promise<void> {
       // แนบไฟล์เข้า ticket เดิม (ถ้ามี)
       if (state.droppedFiles.length > 0) await spUploadFileList('HD_Tickets', ticketId, state.droppedFiles)
       await uploadEmailAttachments('HD_Tickets', ticketId)
+      await uploadOriginalEmail('HD_Tickets', ticketId)
       state.droppedFiles = []
       // Email: แจ้งภายใน (agent + ผู้แจ้ง) ยกเว้นคนกดเอง — ดึงข้อมูล ticket ก่อน
       try {
@@ -676,6 +713,7 @@ async function handleSubmit(): Promise<void> {
         // แนบไฟล์เข้าโครงการที่มีอยู่ — ไม่สร้างใหม่
         if (state.droppedFiles.length > 0) await spUploadFileList('PM_Projects', existingId, state.droppedFiles)
         await uploadEmailAttachments('PM_Projects', existingId)
+        await uploadOriginalEmail('PM_Projects', existingId)
         state.droppedFiles = []
         showToast('แนบไฟล์เข้าโครงการแล้ว!')
       } else {
@@ -701,6 +739,7 @@ async function handleSubmit(): Promise<void> {
         })
         if (state.droppedFiles.length > 0) await spUploadFileList('PM_Projects', newProjectId, state.droppedFiles)
         await uploadEmailAttachments('PM_Projects', newProjectId)
+        await uploadOriginalEmail('PM_Projects', newProjectId)
         state.droppedFiles = []
         showToast('สร้างโครงการสำเร็จ!')
       }
@@ -724,7 +763,7 @@ const TAB_META: Record<Tab, { label: string; icon: string }> = {
 }
 
 // ─── Render ───────────────────────────────────────────────────────────────────
-const FORM_IDS = ['f-title','f-description','f-priority','f-customer-email','f-cc','f-assigned-email','f-project','f-existing-project','f-due-date','f-note','f-severity','f-status','f-incident-date','f-resolution','f-ticket','f-comment','f-comment-type','f-company','f-group','f-start','f-end','f-ext-att']
+const FORM_IDS = ['f-title','f-description','f-priority','f-customer-email','f-cc','f-assigned-email','f-project','f-existing-project','f-due-date','f-note','f-severity','f-status','f-incident-date','f-resolution','f-ticket','f-comment','f-comment-type','f-company','f-group','f-start','f-end','f-ext-att','f-attach-eml']
 let formCache: Record<string, string | boolean> = {}
 function captureForm(): void {
   for (const id of FORM_IDS) {
@@ -1156,6 +1195,10 @@ function fileField(): string {
 
   return `<div class="space-y-1">
     <label class="block text-xs font-medium text-slate-600">ไฟล์แนบ</label>
+    <label class="flex items-center gap-2 text-xs text-slate-700 cursor-pointer hover:bg-slate-50 rounded px-1 py-0.5">
+      <input type="checkbox" id="f-attach-eml" />
+      <span class="flex-1">📧 แนบอีเมลต้นฉบับ (.eml)</span>
+    </label>
     ${emailAttHtml}
     <div id="drop-zone"
       class="relative border-2 border-dashed border-slate-300 rounded-lg p-4 text-center text-xs text-slate-400
