@@ -670,30 +670,40 @@ async function handleSubmit(): Promise<void> {
       showToast('เพิ่ม Comment สำเร็จ!')
 
     } else if (state.tab === 'project') {
-      const title = (document.getElementById('f-title') as HTMLInputElement).value.trim()
-      const company = (document.getElementById('f-company') as HTMLInputElement).value.trim()
-      const projectGroup = (document.getElementById('f-group') as HTMLSelectElement).value
-      const status = (document.getElementById('f-status') as HTMLSelectElement).value
-      const startDate = (document.getElementById('f-start') as HTMLInputElement).value
-      const endDate = (document.getElementById('f-end') as HTMLInputElement).value
-      const description = (document.getElementById('f-description') as HTMLTextAreaElement).value.trim()
-      if (!title) { showToast('กรุณาใส่ชื่อโครงการ', 'error'); return }
+      const existingId = parseInt((document.getElementById('f-existing-project') as HTMLSelectElement)?.value || '0')
 
-      const newProjectId = await spCreate('PM_Projects', {
-        Title: title,
-        Company: company || undefined,
-        ProjectGroup: projectGroup,
-        Progress: 0,
-        StartDate: startDate || undefined,
-        EndDate: endDate || null,
-        Status: status,
-        CreatedByEmail: state.account.username,
-        Comment: description || undefined,
-      })
-      if (state.droppedFiles.length > 0) await spUploadFileList('PM_Projects', newProjectId, state.droppedFiles)
-      await uploadEmailAttachments('PM_Projects', newProjectId)
-      state.droppedFiles = []
-      showToast('สร้างโครงการสำเร็จ!')
+      if (existingId) {
+        // แนบไฟล์เข้าโครงการที่มีอยู่ — ไม่สร้างใหม่
+        if (state.droppedFiles.length > 0) await spUploadFileList('PM_Projects', existingId, state.droppedFiles)
+        await uploadEmailAttachments('PM_Projects', existingId)
+        state.droppedFiles = []
+        showToast('แนบไฟล์เข้าโครงการแล้ว!')
+      } else {
+        const title = (document.getElementById('f-title') as HTMLInputElement).value.trim()
+        const company = (document.getElementById('f-company') as HTMLInputElement).value.trim()
+        const projectGroup = (document.getElementById('f-group') as HTMLSelectElement).value
+        const status = (document.getElementById('f-status') as HTMLSelectElement).value
+        const startDate = (document.getElementById('f-start') as HTMLInputElement).value
+        const endDate = (document.getElementById('f-end') as HTMLInputElement).value
+        const description = (document.getElementById('f-description') as HTMLTextAreaElement).value.trim()
+        if (!title) { showToast('กรุณาใส่ชื่อโครงการ', 'error'); return }
+
+        const newProjectId = await spCreate('PM_Projects', {
+          Title: title,
+          Company: company || undefined,
+          ProjectGroup: projectGroup,
+          Progress: 0,
+          StartDate: startDate || undefined,
+          EndDate: endDate || null,
+          Status: status,
+          CreatedByEmail: state.account.username,
+          Comment: description || undefined,
+        })
+        if (state.droppedFiles.length > 0) await spUploadFileList('PM_Projects', newProjectId, state.droppedFiles)
+        await uploadEmailAttachments('PM_Projects', newProjectId)
+        state.droppedFiles = []
+        showToast('สร้างโครงการสำเร็จ!')
+      }
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -714,7 +724,7 @@ const TAB_META: Record<Tab, { label: string; icon: string }> = {
 }
 
 // ─── Render ───────────────────────────────────────────────────────────────────
-const FORM_IDS = ['f-title','f-description','f-priority','f-customer-email','f-cc','f-assigned-email','f-project','f-due-date','f-note','f-severity','f-status','f-incident-date','f-resolution','f-ticket','f-comment','f-comment-type','f-company','f-group','f-start','f-end','f-ext-att']
+const FORM_IDS = ['f-title','f-description','f-priority','f-customer-email','f-cc','f-assigned-email','f-project','f-existing-project','f-due-date','f-note','f-severity','f-status','f-incident-date','f-resolution','f-ticket','f-comment','f-comment-type','f-company','f-group','f-start','f-end','f-ext-att']
 let formCache: Record<string, string | boolean> = {}
 function captureForm(): void {
   for (const id of FORM_IDS) {
@@ -939,7 +949,15 @@ function render(): void {
       ${fileField()}
     `
   } else if (tab === 'project') {
+    const existingOpts = state.projects.length > 0
+      ? `<select id="f-existing-project" class="${inputCls}">
+          <option value="">➕ สร้างโครงการใหม่</option>
+          ${state.projects.map(p => `<option value="${p.id}">📎 แนบเข้า: ${esc(p.Title)}</option>`).join('')}
+        </select>`
+      : `<div class="text-xs text-slate-400">ไม่มีโครงการเดิม — จะสร้างใหม่</div>`
     formHTML = `
+      ${field('แนบเข้าโครงการ / สร้างใหม่', existingOpts)}
+      <div id="new-project-fields" class="space-y-3">
       ${field('ชื่อโครงการ *', `<input id="f-title" type="text" required
         class="${inputCls}" value="${esc(emailSubject)}" />`)}
       ${field('บริษัท / ลูกค้า', `<input id="f-company" type="text" class="${inputCls}" value="${esc(state.signatureContact?.company ?? '')}" />`)}
@@ -963,6 +981,7 @@ function render(): void {
       </div>
       ${field('รายละเอียด', `<textarea id="f-description" rows="4"
         class="${inputCls} resize-y">${esc(emailBodyPreview)}</textarea>`)}
+      </div>
       ${fileField()}
     `
   }
@@ -996,6 +1015,20 @@ function render(): void {
   document.getElementById('btn-logout')?.addEventListener('click', logout)
   document.getElementById('submit-btn')?.addEventListener('click', handleSubmit)
   document.getElementById('btn-import-customer')?.addEventListener('click', importAsCustomer)
+
+  // Project tab: เลือกโครงการเดิม → ซ่อนช่องสร้างใหม่ + เปลี่ยน label ปุ่ม
+  const existingProjSel = document.getElementById('f-existing-project') as HTMLSelectElement | null
+  if (existingProjSel) {
+    const applyExistingProjState = () => {
+      const picked = !!existingProjSel.value
+      const fields = document.getElementById('new-project-fields')
+      if (fields) fields.style.display = picked ? 'none' : ''
+      const sb = document.getElementById('submit-btn')
+      if (sb) sb.textContent = picked ? 'แนบไฟล์เข้าโครงการ' : 'สร้างโครงการ'
+    }
+    existingProjSel.addEventListener('change', applyExistingProjState)
+    applyExistingProjState()
+  }
 
 
   document.querySelectorAll('.tab-btn').forEach(btn => {
