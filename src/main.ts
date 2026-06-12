@@ -28,7 +28,7 @@ const msalInstance = new PublicClientApplication({
 })
 
 // ─── State ────────────────────────────────────────────────────────────────────
-type Tab = 'ticket' | 'task' | 'incident' | 'comment' | 'project'
+type Tab = 'ticket' | 'task' | 'incident' | 'comment' | 'project' | 'projcomment'
 
 interface Project { id: number; Title: string }
 interface Agent { email: string; name: string }
@@ -753,6 +753,47 @@ async function handleSubmit(): Promise<void> {
         state.droppedFiles = []
         showToast('สร้างโครงการสำเร็จ!')
       }
+
+    } else if (state.tab === 'projcomment') {
+      const projectId = parseInt((document.getElementById('f-project') as HTMLSelectElement)?.value || '0')
+      const commentText = (document.getElementById('f-comment') as HTMLTextAreaElement).value.trim()
+      const commentType = (document.getElementById('f-comment-type') as HTMLSelectElement).value
+      if (!projectId) { showToast('กรุณาเลือกโครงการ', 'error'); return }
+      if (!commentText) { showToast('กรุณาพิมพ์ Comment', 'error'); return }
+
+      const commentId = await spCreate('PM_Comments', {
+        Title: commentText.slice(0, 100),
+        ProjectID: projectId,
+        CommentText: commentText,
+        CommentType: commentType,
+        CommentDate: new Date().toISOString(),
+        ParentID: 0,
+      })
+      // แนบไฟล์เข้า comment item โดยตรง (เหมือน webapp)
+      if (state.droppedFiles.length > 0) await spUploadFileList('PM_Comments', commentId, state.droppedFiles)
+      await uploadEmailAttachments('PM_Comments', commentId)
+      await uploadOriginalEmail('PM_Comments', commentId)
+      state.droppedFiles = []
+      // แจ้งเจ้าของโครงการ (in-app) ยกเว้นคนกดเอง
+      try {
+        const token = await getToken()
+        const pUrl = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('PM_Projects')/items(${projectId})?$select=Title,CreatedByEmail`
+        const pRes = await fetch(pUrl, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata' } })
+        if (pRes.ok) {
+          const p = await pRes.json() as { Title?: string; CreatedByEmail?: string }
+          const actor = state.account.username.toLowerCase()
+          if (p.CreatedByEmail && p.CreatedByEmail.toLowerCase() !== actor) {
+            await createNotification({
+              recipients: [p.CreatedByEmail],
+              title: `💬 ${state.account?.name ?? 'มีคน'} คอมเมนต์ในโครงการ ${p.Title ?? ''}`,
+              message: commentText.slice(0, 200),
+              linkPath: `/projects/${projectId}?tab=comments`,
+              eventType: 'comment_added',
+            })
+          }
+        }
+      } catch { /* non-critical */ }
+      showToast('เพิ่ม Comment สำเร็จ!')
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -765,12 +806,19 @@ async function handleSubmit(): Promise<void> {
 
 // ─── Tab labels ───────────────────────────────────────────────────────────────
 const TAB_META: Record<Tab, { label: string; icon: string }> = {
-  ticket:   { label: 'Ticket',   icon: '🎫' },
-  task:     { label: 'Task',     icon: '✅' },
-  incident: { label: 'Incident', icon: '🚨' },
-  comment:  { label: 'Comment',  icon: '💬' },
-  project:  { label: 'Project',  icon: '📁' },
+  ticket:      { label: 'Ticket',   icon: '🎫' },
+  comment:     { label: 'Comment',  icon: '💬' },
+  project:     { label: 'Project',  icon: '📁' },
+  task:        { label: 'Task',     icon: '✅' },
+  incident:    { label: 'Incident', icon: '🚨' },
+  projcomment: { label: 'Comment',  icon: '💬' },
 }
+
+// จัด tab เป็นหมวดหมู่
+const TAB_GROUPS: { title: string; tabs: Tab[] }[] = [
+  { title: '🎫 Helpdesk', tabs: ['ticket', 'comment'] },
+  { title: '📁 Project',   tabs: ['project', 'task', 'incident', 'projcomment'] },
+]
 
 // ─── Render ───────────────────────────────────────────────────────────────────
 const FORM_IDS = ['f-title','f-description','f-priority','f-customer-email','f-cc','f-assigned-email','f-project','f-existing-project','f-due-date','f-note','f-severity','f-status','f-incident-date','f-resolution','f-ticket','f-comment','f-comment-type','f-company','f-group','f-start','f-end','f-ext-att','f-attach-eml']
@@ -883,16 +931,24 @@ function render(): void {
        </div>`
     : ''
 
-  // ── Tab switcher ──
+  // ── Tab switcher (จัดเป็นหมวดหมู่) ──
   const tabsHTML = `
-    <div class="grid grid-cols-5 gap-1 mx-3 mt-3">
-      ${(Object.entries(TAB_META) as [Tab, { label: string; icon: string }][]).map(([key, meta]) => `
-        <button data-tab="${key}"
-          class="tab-btn flex flex-col items-center gap-1 py-2 rounded-lg transition ${
-            tab === key ? 'bg-blue-700 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}">
-          <span class="text-base leading-none">${meta.icon}</span>
-          <span class="text-[9px] font-medium leading-none">${meta.label}</span>
-        </button>
+    <div class="mx-3 mt-3 space-y-2">
+      ${TAB_GROUPS.map(group => `
+        <div>
+          <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1 px-0.5">${group.title}</div>
+          <div class="grid grid-cols-4 gap-1">
+            ${group.tabs.map(key => {
+              const meta = TAB_META[key]
+              return `<button data-tab="${key}"
+                class="tab-btn flex flex-col items-center gap-1 py-2 rounded-lg transition ${
+                  tab === key ? 'bg-blue-700 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}">
+                <span class="text-base leading-none">${meta.icon}</span>
+                <span class="text-[9px] font-medium leading-none">${meta.label}</span>
+              </button>`
+            }).join('')}
+          </div>
+        </div>
       `).join('')}
     </div>
   `
@@ -1033,9 +1089,20 @@ function render(): void {
       </div>
       ${fileField()}
     `
+  } else if (tab === 'projcomment') {
+    formHTML = `
+      ${field('เลือกโครงการ *', projectSelect())}
+      ${field('ประเภท', `<select id="f-comment-type" class="${inputCls}">
+        <option value="Internal">Internal</option>
+        <option value="External">External</option>
+      </select>`)}
+      ${field('Comment *', `<textarea id="f-comment" rows="5"
+        class="${inputCls} resize-y" placeholder="พิมพ์ comment...">${esc(emailBodyPreview)}</textarea>`)}
+      ${fileField()}
+    `
   }
 
-  const submitLabel = tab === 'comment' ? 'เพิ่ม Comment'
+  const submitLabel = tab === 'comment' || tab === 'projcomment' ? 'เพิ่ม Comment'
     : tab === 'project' ? 'สร้างโครงการ'
     : tab === 'incident' ? 'แจ้ง Incident'
     : tab === 'task' ? 'สร้าง Task' : 'สร้าง Ticket'
