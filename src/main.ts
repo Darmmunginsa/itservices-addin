@@ -9,7 +9,7 @@ const CLIENT_ID = '0bab07cf-65e6-487c-89af-c917fc1a5a13'
 const TENANT_ID = 'd569b991-89fc-4a62-9df5-eb361abcef40'
 const SHAREPOINT_URL = 'https://rpaexpert.sharepoint.com/sites/iTServicesCo.Ltd'
 const SP_SCOPE = 'https://rpaexpert.sharepoint.com/.default'
-const GRAPH_SCOPES = ['https://graph.microsoft.com/Calendars.ReadWrite', 'https://graph.microsoft.com/Mail.Send']
+const GRAPH_SCOPES = ['https://graph.microsoft.com/Calendars.ReadWrite', 'https://graph.microsoft.com/Mail.Send', 'https://graph.microsoft.com/Mail.Read']
 
 // ─── MSAL setup ───────────────────────────────────────────────────────────────
 const msalInstance = new PublicClientApplication({
@@ -348,26 +348,21 @@ async function uploadEmailAttachments(listTitle: string, itemId: number): Promis
   }
 }
 
-// แนบอีเมลต้นฉบับเป็นไฟล์ .eml (ใช้ callback token + Outlook REST $value — ไม่ต้องขอ Graph scope เพิ่ม)
+// แนบอีเมลต้นฉบับเป็นไฟล์ .eml (ดึง MIME ผ่าน Microsoft Graph — ใช้ Mail.Read)
 async function uploadOriginalEmail(listTitle: string, itemId: number): Promise<void> {
   const cb = document.getElementById('f-attach-eml') as HTMLInputElement | null
   if (!cb?.checked) return
   const mbItem = Office.context.mailbox.item
   if (!mbItem) return
 
-  // ดึง MIME (.eml) ของอีเมลฉบับนี้
-  const mime = await new Promise<ArrayBuffer>((resolve, reject) => {
-    Office.context.mailbox.getCallbackTokenAsync({ isRest: true }, async tok => {
-      if (tok.status !== Office.AsyncResultStatus.Succeeded) { reject(new Error('getCallbackToken failed')); return }
-      try {
-        const restId = Office.context.mailbox.convertToRestId(mbItem.itemId, Office.MailboxEnums.RestVersion.v2_0)
-        const url = `${Office.context.mailbox.restUrl}/v2.0/me/messages/${restId}/$value`
-        const res = await fetch(url, { headers: { Authorization: `Bearer ${tok.value}` } })
-        if (!res.ok) { reject(new Error(`fetch MIME failed: ${res.status}`)); return }
-        resolve(await res.arrayBuffer())
-      } catch (e) { reject(e instanceof Error ? e : new Error(String(e))) }
-    })
+  // ดึง MIME (.eml) ของอีเมลฉบับนี้ผ่าน Graph /messages/{id}/$value
+  const restId = Office.context.mailbox.convertToRestId(mbItem.itemId, Office.MailboxEnums.RestVersion.v2_0)
+  const graphToken = await getGraphToken()
+  const mimeRes = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${restId}/$value`, {
+    headers: { Authorization: `Bearer ${graphToken}` },
   })
+  if (!mimeRes.ok) throw new Error(`ดึงอีเมลต้นฉบับไม่สำเร็จ (Graph ${mimeRes.status})`)
+  const mime = await mimeRes.arrayBuffer()
 
   // ตั้งชื่อไฟล์จาก subject (sanitize อักขระต้องห้ามใน SharePoint)
   const subject = (mbItem.subject || 'email').replace(/[\\/:*?"<>|#%&{}~]/g, '_').slice(0, 100).trim() || 'email'
