@@ -385,13 +385,17 @@ async function uploadOriginalEmail(listTitle: string, itemId: number): Promise<v
 
   const restId = Office.context.mailbox.convertToRestId(mbItem.itemId, Office.MailboxEnums.RestVersion.v2_0)
   let mime: ArrayBuffer
+  let graphErr = '', cbErr = ''
   try {
     mime = await fetchEmlViaGraph(restId)
-  } catch {
+  } catch (e) {
+    graphErr = e instanceof Error ? e.message : String(e)
     try {
       mime = await fetchEmlViaCallback(restId)   // สำรอง
-    } catch {
-      showToast('แนบไฟล์อื่นสำเร็จ แต่ดึงอีเมลต้นฉบับ (.eml) ไม่ได้ — ตรวจสิทธิ์ Mail.Read', 'error')
+    } catch (e2) {
+      cbErr = e2 instanceof Error ? e2.message : String(e2)
+      console.error('[eml] graph:', graphErr, '| callback:', cbErr)
+      showToast(`ดึง .eml ไม่ได้ (Graph: ${graphErr} / REST: ${cbErr}) — ไฟล์อื่นบันทึกแล้ว`, 'error')
       return
     }
   }
