@@ -93,16 +93,16 @@ async function getToken(): Promise<string> {
   return result.accessToken
 }
 
-// Graph token (Calendar)
-async function getGraphToken(): Promise<string> {
+// Graph token (Calendar / Mail). forceRefresh = ดึงใหม่เพื่อรับ scope ที่เพิ่งถูก consent
+async function getGraphToken(forceRefresh = false): Promise<string> {
   const accounts = msalInstance.getAllAccounts()
   if (accounts.length === 0) throw new Error('Not signed in')
-  const request = { scopes: GRAPH_SCOPES, account: accounts[0] }
+  const request = { scopes: GRAPH_SCOPES, account: accounts[0], forceRefresh }
   try {
     const r = await msalInstance.acquireTokenSilent(request)
     return r.accessToken
   } catch {
-    const r = await msalInstance.acquireTokenPopup(request)
+    const r = await msalInstance.acquireTokenPopup({ scopes: GRAPH_SCOPES, account: accounts[0] })
     return r.accessToken
   }
 }
@@ -348,21 +348,53 @@ async function uploadEmailAttachments(listTitle: string, itemId: number): Promis
   }
 }
 
-// แนบอีเมลต้นฉบับเป็นไฟล์ .eml (ดึง MIME ผ่าน Microsoft Graph — ใช้ Mail.Read)
+// ดึง MIME (.eml) ผ่าน Graph — retry พร้อม force-refresh token ถ้าโดน 401/403 (scope เพิ่งถูก consent)
+async function fetchEmlViaGraph(restId: string): Promise<ArrayBuffer> {
+  const url = `https://graph.microsoft.com/v1.0/me/messages/${restId}/$value`
+  let token = await getGraphToken()
+  let res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+  if (res.status === 401 || res.status === 403) {
+    token = await getGraphToken(true)   // บังคับดึง token ใหม่ให้รวม scope ที่เพิ่ง consent
+    res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+  }
+  if (!res.ok) throw new Error(`Graph ${res.status}`)
+  return res.arrayBuffer()
+}
+
+// ดึง MIME ผ่าน Outlook REST + callback token (สำรอง — ไม่ต้องใช้ Graph scope)
+async function fetchEmlViaCallback(restId: string): Promise<ArrayBuffer> {
+  const tok = await new Promise<string>((resolve, reject) => {
+    Office.context.mailbox.getCallbackTokenAsync({ isRest: true }, r => {
+      if (r.status === Office.AsyncResultStatus.Succeeded) resolve(r.value)
+      else reject(new Error('callback token failed'))
+    })
+  })
+  const res = await fetch(`${Office.context.mailbox.restUrl}/v2.0/me/messages/${restId}/$value`, {
+    headers: { Authorization: `Bearer ${tok}` },
+  })
+  if (!res.ok) throw new Error(`REST ${res.status}`)
+  return res.arrayBuffer()
+}
+
+// แนบอีเมลต้นฉบับเป็นไฟล์ .eml — non-fatal: ถ้าดึงไม่ได้จะเตือนเฉยๆ ไม่ทำให้ submit ล้ม
 async function uploadOriginalEmail(listTitle: string, itemId: number): Promise<void> {
   const cb = document.getElementById('f-attach-eml') as HTMLInputElement | null
   if (!cb?.checked) return
   const mbItem = Office.context.mailbox.item
   if (!mbItem) return
 
-  // ดึง MIME (.eml) ของอีเมลฉบับนี้ผ่าน Graph /messages/{id}/$value
   const restId = Office.context.mailbox.convertToRestId(mbItem.itemId, Office.MailboxEnums.RestVersion.v2_0)
-  const graphToken = await getGraphToken()
-  const mimeRes = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${restId}/$value`, {
-    headers: { Authorization: `Bearer ${graphToken}` },
-  })
-  if (!mimeRes.ok) throw new Error(`ดึงอีเมลต้นฉบับไม่สำเร็จ (Graph ${mimeRes.status})`)
-  const mime = await mimeRes.arrayBuffer()
+  let mime: ArrayBuffer
+  try {
+    mime = await fetchEmlViaGraph(restId)
+  } catch {
+    try {
+      mime = await fetchEmlViaCallback(restId)   // สำรอง
+    } catch {
+      showToast('แนบไฟล์อื่นสำเร็จ แต่ดึงอีเมลต้นฉบับ (.eml) ไม่ได้ — ตรวจสิทธิ์ Mail.Read', 'error')
+      return
+    }
+  }
 
   // ตั้งชื่อไฟล์จาก subject (sanitize อักขระต้องห้ามใน SharePoint)
   const subject = (mbItem.subject || 'email').replace(/[\\/:*?"<>|#%&{}~]/g, '_').slice(0, 100).trim() || 'email'
@@ -373,7 +405,7 @@ async function uploadOriginalEmail(listTitle: string, itemId: number): Promise<v
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata', 'Content-Type': 'application/octet-stream' },
     body: mime,
   })
-  if (!res.ok) throw new Error('แนบอีเมลต้นฉบับไม่สำเร็จ')
+  if (!res.ok) showToast('บันทึกไฟล์ .eml ไม่สำเร็จ', 'error')
 }
 
 async function spUploadFileList(listTitle: string, itemId: number, files: File[]): Promise<void> {
