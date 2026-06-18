@@ -522,6 +522,20 @@ function genTicketNumber(): string {
   return `HD-${ymd}-${Math.floor(Math.random() * 900 + 100)}`
 }
 
+// มีไฟล์/อีเมลที่จะแนบไหม (ไฟล์ลากวาง + email attachment ที่ติ๊ก + อีเมลต้นฉบับ)
+function hasAttachments(): boolean {
+  return state.droppedFiles.length > 0
+    || document.querySelectorAll('.email-att-cb:checked').length > 0
+    || ((document.getElementById('f-attach-eml') as HTMLInputElement | null)?.checked ?? false)
+}
+
+// อัปโหลดทุกอย่าง (ไฟล์ลากวาง + email attachment + อีเมลต้นฉบับ) เข้า item ที่ระบุ
+async function uploadAllTo(listTitle: string, itemId: number): Promise<void> {
+  if (state.droppedFiles.length > 0) await spUploadFileList(listTitle, itemId, state.droppedFiles)
+  await uploadEmailAttachments(listTitle, itemId)
+  await uploadOriginalEmail(listTitle, itemId)
+}
+
 // ─── Submit handlers ──────────────────────────────────────────────────────────
 let _submitting = false
 async function handleSubmit(): Promise<void> {
@@ -560,9 +574,18 @@ async function handleSubmit(): Promise<void> {
         AssignedEmail: assignedEmail || undefined,
         AssignedToName: assignedAgent?.name ?? state.account?.name ?? '',
       })
-      if (state.droppedFiles.length > 0) await spUploadFileList('HD_Tickets', ticketId, state.droppedFiles)
-      await uploadEmailAttachments('HD_Tickets', ticketId)
-      await uploadOriginalEmail('HD_Tickets', ticketId)
+      // ไฟล์แนบ → เก็บเป็น Comment ของ ticket (เปิดดูจาก thread ได้)
+      if (hasAttachments()) {
+        const cId = await spCreate('HD_TicketComments', {
+          Title: '📎 ไฟล์แนบจากอีเมล',
+          TicketID: ticketId,
+          CommentText: 'ไฟล์แนบจาก Outlook Add-in',
+          CommentType: 'Internal',
+          CommentDate: new Date().toISOString(),
+          ParentID: 0,
+        })
+        await uploadAllTo('HD_TicketComments', cId)
+      }
       state.droppedFiles = []
       // Email: 1 ฉบับ — To = ลูกค้า, CC = agent + ผู้แจ้ง (เหมือน webapp)
       await sendTemplateEmail('ticket_created', {
@@ -676,17 +699,15 @@ async function handleSubmit(): Promise<void> {
       if (!ticketId) { showToast('กรุณาเลือก Ticket', 'error'); return }
       if (!commentText) { showToast('กรุณาพิมพ์ Comment', 'error'); return }
 
-      await spCreate('HD_TicketComments', {
+      const tcId = await spCreate('HD_TicketComments', {
         Title: commentText.slice(0, 100),
         TicketID: ticketId,
         CommentText: commentText,
         CommentType: commentType,
         CommentDate: new Date().toISOString(),
       })
-      // แนบไฟล์เข้า ticket เดิม (ถ้ามี)
-      if (state.droppedFiles.length > 0) await spUploadFileList('HD_Tickets', ticketId, state.droppedFiles)
-      await uploadEmailAttachments('HD_Tickets', ticketId)
-      await uploadOriginalEmail('HD_Tickets', ticketId)
+      // แนบไฟล์เข้า comment โดยตรง → เปิดดูจาก thread ได้ (มี thumbnail)
+      await uploadAllTo('HD_TicketComments', tcId)
       state.droppedFiles = []
       // Email: แจ้งภายใน (agent + ผู้แจ้ง) ยกเว้นคนกดเอง — ดึงข้อมูล ticket ก่อน
       try {
@@ -732,9 +753,18 @@ async function handleSubmit(): Promise<void> {
         CreatedByEmail: state.account.username,
         Comment: description || undefined,
       })
-      if (state.droppedFiles.length > 0) await spUploadFileList('PM_Projects', newProjectId, state.droppedFiles)
-      await uploadEmailAttachments('PM_Projects', newProjectId)
-      await uploadOriginalEmail('PM_Projects', newProjectId)
+      // ไฟล์แนบ → เก็บเป็น Comment ของโครงการ (เปิดดูจาก thread ได้)
+      if (hasAttachments()) {
+        const cId = await spCreate('PM_Comments', {
+          Title: '📎 ไฟล์แนบจากอีเมล',
+          ProjectID: newProjectId,
+          CommentText: 'ไฟล์แนบจาก Outlook Add-in',
+          CommentType: 'Internal',
+          CommentDate: new Date().toISOString(),
+          ParentID: 0,
+        })
+        await uploadAllTo('PM_Comments', cId)
+      }
       state.droppedFiles = []
       showToast('สร้างโครงการสำเร็จ!')
 
@@ -754,9 +784,7 @@ async function handleSubmit(): Promise<void> {
         ParentID: 0,
       })
       // แนบไฟล์เข้า comment item โดยตรง (เหมือน webapp)
-      if (state.droppedFiles.length > 0) await spUploadFileList('PM_Comments', commentId, state.droppedFiles)
-      await uploadEmailAttachments('PM_Comments', commentId)
-      await uploadOriginalEmail('PM_Comments', commentId)
+      await uploadAllTo('PM_Comments', commentId)
       state.droppedFiles = []
       // แจ้งเจ้าของโครงการ (in-app) ยกเว้นคนกดเอง
       try {
