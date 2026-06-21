@@ -22,10 +22,39 @@ const msalInstance = new PublicClientApplication({
     navigateToLoginRequestUrl: false,
   },
   cache: {
-    cacheLocation: 'sessionStorage',
+    // localStorage = แชร์ระหว่างหน้าหลักกับ auth dialog (same origin) → mobile login ผ่าน dialog แล้วหน้าหลักใช้ token ต่อได้
+    cacheLocation: 'localStorage',
     storeAuthStateInCookie: false,
   },
 })
+
+const AUTH_DIALOG_URL = window.location.origin.includes('localhost')
+  ? `${window.location.origin}/auth.html`
+  : 'https://darmmunginsa.github.io/itservices-addin/auth.html'
+
+// Outlook มือถือ (iOS/Android) — popup ใช้ไม่ได้ ต้อง auth ผ่าน Office Dialog API
+function isMobilePlatform(): boolean {
+  const p = Office.context?.diagnostics?.platform
+  return p === Office.PlatformType.iOS || p === Office.PlatformType.Android
+}
+
+// เปิด auth dialog (auth.html ทำ MSAL redirect แล้วเขียน token ลง localStorage ที่ share กัน)
+function openAuthDialog(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    Office.context.ui.displayDialogAsync(AUTH_DIALOG_URL, { height: 60, width: 30, promptBeforeOpen: false }, res => {
+      if (res.status !== Office.AsyncResultStatus.Succeeded) { reject(new Error('เปิดหน้าเข้าสู่ระบบไม่ได้')); return }
+      const dlg = res.value
+      dlg.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
+        dlg.close()
+        const raw = (arg as { message?: string }).message
+        if (!raw) { reject(new Error('auth message error')); return }
+        try { const m = JSON.parse(raw); m.ok ? resolve() : reject(new Error(m.error || 'auth failed')) }
+        catch { reject(new Error('auth message error')) }
+      })
+      dlg.addEventHandler(Office.EventType.DialogEventReceived, () => reject(new Error('ปิดหน้าเข้าสู่ระบบก่อนเสร็จ')))
+    })
+  })
+}
 
 // ─── State ────────────────────────────────────────────────────────────────────
 type Tab = 'ticket' | 'task' | 'incident' | 'comment' | 'project' | 'projcomment'
@@ -83,14 +112,17 @@ async function getToken(): Promise<string> {
   if (accounts.length === 0) throw new Error('Not signed in')
 
   const request = { scopes: [SP_SCOPE], account: accounts[0] }
-  let result: AuthenticationResult
-
   try {
-    result = await msalInstance.acquireTokenSilent(request)
+    return (await msalInstance.acquireTokenSilent(request)).accessToken
   } catch {
-    result = await msalInstance.acquireTokenPopup(request)
+    if (isMobilePlatform()) {
+      await openAuthDialog()
+      const acc = msalInstance.getAllAccounts()[0]
+      if (!acc) throw new Error('เข้าสู่ระบบไม่สำเร็จ')
+      return (await msalInstance.acquireTokenSilent({ scopes: [SP_SCOPE], account: acc })).accessToken
+    }
+    return (await msalInstance.acquireTokenPopup(request)).accessToken
   }
-  return result.accessToken
 }
 
 // Graph token (Calendar / Mail). forceRefresh = ดึงใหม่เพื่อรับ scope ที่เพิ่งถูก consent
@@ -102,6 +134,12 @@ async function getGraphToken(forceRefresh = false): Promise<string> {
     const r = await msalInstance.acquireTokenSilent(request)
     return r.accessToken
   } catch {
+    if (isMobilePlatform()) {
+      await openAuthDialog()
+      const acc = msalInstance.getAllAccounts()[0]
+      if (!acc) throw new Error('เข้าสู่ระบบไม่สำเร็จ')
+      return (await msalInstance.acquireTokenSilent({ scopes: GRAPH_SCOPES, account: acc })).accessToken
+    }
     const r = await msalInstance.acquireTokenPopup({ scopes: GRAPH_SCOPES, account: accounts[0] })
     return r.accessToken
   }
@@ -182,8 +220,15 @@ async function login(): Promise<void> {
   if (btn) { btn.disabled = true; btn.textContent = 'กำลังเข้าสู่ระบบ…' }
   if (btn2) { btn2.disabled = true }
   try {
-    const result = await msalInstance.loginPopup({ scopes: [SP_SCOPE] })
-    state.account = result.account
+    if (isMobilePlatform()) {
+      // มือถือ: login ผ่าน Office Dialog (popup ใช้ไม่ได้)
+      await openAuthDialog()
+      state.account = msalInstance.getAllAccounts()[0] ?? null
+      if (!state.account) throw new Error('เข้าสู่ระบบไม่สำเร็จ')
+    } else {
+      const result = await msalInstance.loginPopup({ scopes: [SP_SCOPE] })
+      state.account = result.account
+    }
     await Promise.all([fetchProjects(), fetchAgents(), fetchTickets(), fetchContacts()])
     render()
   } catch {
