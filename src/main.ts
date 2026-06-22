@@ -1446,8 +1446,10 @@ async function init(): Promise<void> {
           // Email attachments — รวมทั้งไฟล์ (File) และอีเมลที่แนบมา (Item → .eml)
           const attachments = item.attachments ?? []
           state.emailAttachments = attachments
-            .filter(a => a.attachmentType === Office.MailboxEnums.AttachmentType.File
-              || a.attachmentType === Office.MailboxEnums.AttachmentType.Item)
+            // กรองรูป inline (โลโก้/รูปในลายเซ็น) ออก — ไม่ใช่ไฟล์แนบจริง
+            .filter(a => !a.isInline
+              && (a.attachmentType === Office.MailboxEnums.AttachmentType.File
+                || a.attachmentType === Office.MailboxEnums.AttachmentType.Item))
             .map(a => ({
               id: a.id,
               name: a.attachmentType === Office.MailboxEnums.AttachmentType.Item
