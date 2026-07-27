@@ -331,6 +331,55 @@ async function sendTemplateEmail(eventKey: string, vars: Record<string, string>,
   } catch { /* email fail = non-critical */ }
 }
 
+/**
+ * ตอบกลับ "ในเธรดเดิม" ของอีเมลลูกค้า (คงหัวข้อเดิม + In-Reply-To/References → Outlook จัดเป็นเธรดเดียวกัน)
+ * ใช้ Graph: createReplyAll → แก้ body/ผู้รับ → send
+ * คืน true ถ้าส่งในเธรดสำเร็จ ; false ถ้าทำไม่ได้ (ผู้เรียกควร fallback ไปส่งเมลใหม่)
+ */
+async function replyInThread(bodyHtml: string, extraCc: string[] = []): Promise<boolean> {
+  try {
+    const mbItem = Office.context.mailbox.item
+    if (!mbItem?.itemId) return false   // อยู่ในโหมด compose หรือไม่มีอีเมลเปิดอยู่
+    const restId = Office.context.mailbox.convertToRestId(mbItem.itemId, Office.MailboxEnums.RestVersion.v2_0)
+    const token = await getGraphToken()
+    const H = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+
+    // 1) สร้าง draft ตอบกลับทุกคน — Graph ใส่หัวข้อเดิม + header เธรดให้อัตโนมัติ
+    const cRes = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${restId}/createReplyAll`, { method: 'POST', headers: H })
+    if (!cRes.ok) return false
+    const draft = await cRes.json() as { id: string; ccRecipients?: { emailAddress: { address: string } }[] }
+
+    // 2) ใส่เนื้อหาของเรา + เพิ่ม CC (agent/ผู้เกี่ยวข้อง) โดยไม่ทับของเดิม
+    const norm = (e: string) => e.trim().toLowerCase()
+    const existingCc = draft.ccRecipients ?? []
+    const have = new Set(existingCc.map(r => norm(r.emailAddress.address)))
+    const addCc = [...new Set(extraCc.filter(Boolean).map(e => e.trim()))]
+      .filter(e => !have.has(norm(e)))
+      .map(a => ({ emailAddress: { address: a } }))
+
+    const patch: Record<string, unknown> = { body: { contentType: 'HTML', content: bodyHtml } }
+    if (addCc.length) patch.ccRecipients = [...existingCc, ...addCc]
+
+    const pRes = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${draft.id}`, {
+      method: 'PATCH', headers: H, body: JSON.stringify(patch),
+    })
+    if (!pRes.ok) return false
+
+    // 3) ส่ง
+    const sRes = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${draft.id}/send`, { method: 'POST', headers: H })
+    return sRes.ok
+  } catch { return false }
+}
+
+/** เนื้อหาเมลจาก template (ไม่ส่ง) — ใช้กับการตอบกลับในเธรด */
+async function renderTemplateBody(eventKey: string, vars: Record<string, string>): Promise<string | null> {
+  const templates = await getEmailTemplates()
+  const tpl = templates.find(t => t.EventKey === eventKey && t.IsEnabled)
+  if (!tpl) return null
+  const body = renderTpl(tpl.Body || '', vars)
+  return body || null
+}
+
 // In-app notification (เหมือน webapp) — เขียนลง HD_Notifications, ตัดคนกดเองออก
 async function createNotification(p: { recipients: string[]; title: string; message: string; linkPath: string; eventType: string }): Promise<void> {
   const norm = (e: string) => e.trim().toLowerCase()
@@ -668,8 +717,10 @@ async function handleSubmit(): Promise<void> {
         await uploadAllTo('HD_TicketComments', cId)
       }
       state.droppedFiles = []
-      // Email: 1 ฉบับ — To = ลูกค้า, CC = agent + ผู้แจ้ง (เหมือน webapp)
-      await sendTemplateEmail('ticket_created', {
+
+      // แจ้งลูกค้า: ตอบกลับ "ในเธรดเดิม" ของอีเมลลูกค้า (คงหัวข้อเดิม, Ticket No. อยู่ในเนื้อเมล)
+      // ถ้าทำไม่ได้ (ไม่ได้เปิดอีเมลอยู่ / Graph พลาด) → fallback ส่งเมลใหม่แบบเดิม
+      const tplVars = {
         ticket_number: ticketNum,
         ticket_title: title,
         priority,
@@ -678,8 +729,23 @@ async function handleSubmit(): Promise<void> {
         customer_name: state.emailSenderName || customerEmail,
         assigned_name: assignedAgent?.name ?? state.account?.name ?? '-',
         link: 'https://itservices.co.th/helpdesk/',
-      }, [customerEmail], [assignedEmail, state.account.username, ...ccEmails])
-      showToast('สร้าง Ticket สำเร็จ!')
+      }
+      const ccList = [assignedEmail, state.account.username, ...ccEmails].filter(Boolean) as string[]
+      let repliedInThread = false
+      const tplBody = await renderTemplateBody('ticket_created', tplVars)
+      if (tplBody) {
+        // แถบ Ticket No. ด้านบนเนื้อเมล — ให้เห็นชัดแทนการใส่ในหัวข้อ
+        const banner =
+          `<div style="border-left:4px solid #2563eb;background:#eff6ff;padding:10px 14px;margin:0 0 14px;font-family:Segoe UI,sans-serif">
+             <div style="font-size:15px;font-weight:700;color:#1e40af">Ticket No. ${ticketNum}</div>
+             <div style="font-size:12px;color:#475569;margin-top:2px">กรุณาตอบกลับในอีเมลฉบับนี้เพื่อให้ข้อมูลอยู่ใน Ticket เดียวกัน</div>
+           </div>`
+        repliedInThread = await replyInThread(banner + tplBody, ccList)
+      }
+      if (!repliedInThread) {
+        await sendTemplateEmail('ticket_created', tplVars, [customerEmail], ccList)
+      }
+      showToast(repliedInThread ? 'สร้าง Ticket และตอบกลับในเธรดเดิมแล้ว!' : 'สร้าง Ticket สำเร็จ!')
 
     } else if (state.tab === 'task') {
       const title = (document.getElementById('f-title') as HTMLInputElement).value.trim()
