@@ -272,6 +272,8 @@ async function spCreate(listTitle: string, body: Record<string, unknown>): Promi
 interface EmailTemplate { EventKey: string; Subject: string; Body: string; IsEnabled: boolean }
 let _tplCache: EmailTemplate[] | null = null
 const DEFAULT_SENDER = 'support@itservices.co.th'
+// CC ทุกครั้งที่เปิด Ticket ใหม่ (ทีมวิศวกรต้องรับรู้ทุกเคส)
+const ALWAYS_CC_TICKET = 'engineer@itservices.co.th'
 
 async function getEmailTemplates(): Promise<EmailTemplate[]> {
   if (_tplCache) return _tplCache
@@ -313,7 +315,9 @@ async function sendTemplateEmail(eventKey: string, vars: Record<string, string>,
     const toArr = [...new Map(to.filter(Boolean).map(e => [norm(e), e])).values()]
     if (toArr.length === 0) return
     const toSet = new Set(toArr.map(norm))
-    const ccArr = [...new Map(cc.filter(Boolean).map(e => [norm(e), e])).values()].filter(e => !toSet.has(norm(e)))
+    // เปิด Ticket ใหม่ → CC ทีมวิศวกรเสมอ
+    const ccAll = eventKey === 'ticket_created' ? [...cc, ALWAYS_CC_TICKET] : cc
+    const ccArr = [...new Map(ccAll.filter(Boolean).map(e => [norm(e), e])).values()].filter(e => !toSet.has(norm(e)))
     const from = await getSenderAddress()
     const token = await getGraphToken()
     const message: Record<string, unknown> = {
@@ -730,7 +734,8 @@ async function handleSubmit(): Promise<void> {
         assigned_name: assignedAgent?.name ?? state.account?.name ?? '-',
         link: 'https://itservices.co.th/helpdesk/',
       }
-      const ccList = [assignedEmail, state.account.username, ...ccEmails].filter(Boolean) as string[]
+      // ALWAYS_CC_TICKET ใส่ตรงนี้ด้วย เพราะทางตอบกลับในเธรดไม่ได้ผ่าน sendTemplateEmail
+      const ccList = [assignedEmail, state.account.username, ...ccEmails, ALWAYS_CC_TICKET].filter(Boolean) as string[]
       let repliedInThread = false
       const tplBody = await renderTemplateBody('ticket_created', tplVars)
       if (tplBody) {
