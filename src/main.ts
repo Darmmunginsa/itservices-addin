@@ -1,3 +1,4 @@
+import { initPhish, analysePhish, phishPanelHTML, bindPhishPanel, submitPhishReport, phishSubmitLabel } from './phishPanel'
 import {
   PublicClientApplication,
   type AccountInfo,
@@ -57,7 +58,7 @@ function openAuthDialog(): Promise<void> {
 }
 
 // ─── State ────────────────────────────────────────────────────────────────────
-type Tab = 'ticket' | 'task' | 'incident' | 'comment' | 'project' | 'projcomment'
+type Tab = 'ticket' | 'task' | 'incident' | 'comment' | 'project' | 'projcomment' | 'phish'
 
 interface Project { id: number; Title: string }
 interface Agent { email: string; name: string }
@@ -548,12 +549,13 @@ async function spUploadAttachments(listTitle: string, itemId: number, files: Fil
 }
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
-function showToast(message: string, type: 'success' | 'error' = 'success'): void {
+function showToast(message: string, type: 'success' | 'error' | 'info' = 'success'): void {
   const container = document.getElementById('toast-container')
   if (!container) return
 
-  const bgColor = type === 'success' ? 'bg-green-500' : 'bg-red-500'
-  const icon = type === 'success' ? '✅' : '❌'
+  // 'info' = แจ้งให้ทราบ ไม่ใช่ความสำเร็จหรือความผิดพลาด (เช่น ยังไม่ได้ตั้งค่า Kasm)
+  const bgColor = type === 'success' ? 'bg-green-500' : type === 'error' ? 'bg-red-500' : 'bg-slate-700'
+  const icon = type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️'
 
   const toast = document.createElement('div')
   toast.className = `toast pointer-events-auto ${bgColor} text-white text-sm font-medium px-4 py-3 rounded-lg shadow-lg max-w-xs mx-2`
@@ -684,7 +686,9 @@ async function handleSubmit(): Promise<void> {
   if (btn) { btn.disabled = true; btn.textContent = 'กำลังบันทึก…' }
 
   try {
-    if (state.tab === 'ticket') {
+    if (state.tab === 'phish') {
+      await submitPhishReport()
+    } else if (state.tab === 'ticket') {
       const title = (document.getElementById('f-title') as HTMLInputElement).value.trim()
       const description = (document.getElementById('f-description') as HTMLTextAreaElement).value.trim()
       const priority = (document.getElementById('f-priority') as HTMLSelectElement).value
@@ -976,12 +980,14 @@ const TAB_META: Record<Tab, { label: string; icon: string }> = {
   task:        { label: 'Task',     icon: '✅' },
   incident:    { label: 'Incident', icon: '🚨' },
   projcomment: { label: 'Comment',  icon: '💬' },
+  phish:       { label: 'PhishGuard', icon: '🛡️' },
 }
 
 // จัด tab เป็นหมวดหมู่
 const TAB_GROUPS: { title: string; tabs: Tab[] }[] = [
   { title: '🎫 Helpdesk', tabs: ['ticket', 'comment'] },
   { title: '📁 Project',   tabs: ['project', 'task', 'incident', 'projcomment'] },
+  { title: '🛡️ Security',  tabs: ['phish'] },
 ]
 
 // ─── Render ───────────────────────────────────────────────────────────────────
@@ -1120,7 +1126,9 @@ function render(): void {
   // ── Form fields by tab ──
   let formHTML = ''
 
-  if (tab === 'ticket') {
+  if (tab === 'phish') {
+    formHTML = phishPanelHTML(!!account)
+  } else if (tab === 'ticket') {
     formHTML = `
       ${field('Title / หัวข้อ', `<input id="f-title" type="text"
         class="${inputCls}"
@@ -1257,7 +1265,8 @@ function render(): void {
     `
   }
 
-  const submitLabel = tab === 'comment' || tab === 'projcomment' ? 'เพิ่ม Comment'
+  const submitLabel = tab === 'phish' ? phishSubmitLabel()
+    : tab === 'comment' || tab === 'projcomment' ? 'เพิ่ม Comment'
     : tab === 'project' ? 'สร้างโครงการ'
     : tab === 'incident' ? 'แจ้ง Incident'
     : tab === 'task' ? 'สร้าง Task' : 'สร้าง Ticket'
@@ -1286,6 +1295,7 @@ function render(): void {
   document.getElementById('btn-logout')?.addEventListener('click', logout)
   document.getElementById('submit-btn')?.addEventListener('click', handleSubmit)
   document.getElementById('btn-import-customer')?.addEventListener('click', importAsCustomer)
+  if (tab === 'phish') bindPhishPanel()
 
 
 
@@ -1295,6 +1305,7 @@ function render(): void {
       if (newTab && newTab !== state.tab) {
         state.tab = newTab
         render()
+        if (newTab === 'phish') analysePhish()
       }
     })
   })
@@ -1472,6 +1483,17 @@ function esc(str: string): string {
 
 // ─── Office.onReady ───────────────────────────────────────────────────────────
 async function init(): Promise<void> {
+  // ผูกแท็บ PhishGuard เข้ากับ auth/HTTP ของแอดอินนี้ (ใช้ token ตัวเดียวกัน ไม่ต้อง login ซ้ำ)
+  initPhish({
+    sharepointUrl: SHAREPOINT_URL,
+    internalDomains: ['itservices.co.th', 'rpaexpert.com', 'rpaexpert.onmicrosoft.com'],
+    getToken,
+    getGraphToken: () => getGraphToken(),
+    account: () => state.account ? { name: state.account.name, username: state.account.username } : null,
+    toast: (msg, type) => showToast(msg, type ?? 'success'),
+    rerender: render,
+  })
+
   // Initialize MSAL
   await msalInstance.initialize()
 
