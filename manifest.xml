@@ -6,11 +6,12 @@
   xsi:type="MailApp">
 
   <Id>f3a7b2c1-d4e5-4f60-a8b9-c0d1e2f34567</Id>
-  <Version>1.0.0.0</Version>
+  <!-- 1.1.0.0 = เพิ่มปุ่ม PhishGuard (ต้อง bump version ไม่งั้น Exchange ไม่รับรู้ว่ามีอัปเดต) -->
+  <Version>1.1.0.0</Version>
   <ProviderName>iT Services</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
   <DisplayName DefaultValue="iT Services Helpdesk"/>
-  <Description DefaultValue="Create Ticket, Task, or Incident directly from an email."/>
+  <Description DefaultValue="Create a Ticket, Task, or Incident from an email, and check the email for phishing signals."/>
   <IconUrl DefaultValue="https://darmmunginsa.github.io/itservices-addin/icon-80.png"/>
   <HighResolutionIconUrl DefaultValue="https://darmmunginsa.github.io/itservices-addin/icon-128.png"/>
   <SupportUrl DefaultValue="https://darmmunginsa.github.io/itservices-addin/"/>
@@ -77,6 +78,23 @@
                     <SourceLocation resid="Taskpane.Url"/>
                   </Action>
                 </Control>
+                <!-- PhishGuard: แอปคนละตัว (คนละ repo) แต่รวมอยู่ใน add-in เดียวกัน
+                     ทำได้เพราะ SourceLocation ชี้ไป URL ใดก็ได้ที่อยู่ใน AppDomains -->
+                <Control xsi:type="Button" id="msgReadPhishGuardButton">
+                  <Label resid="PhishButton.Label"/>
+                  <Supertip>
+                    <Title resid="PhishButton.Label"/>
+                    <Description resid="PhishButton.Tooltip"/>
+                  </Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="Icon.16x16"/>
+                    <bt:Image size="32" resid="Icon.32x32"/>
+                    <bt:Image size="80" resid="Icon.80x80"/>
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <SourceLocation resid="PhishGuard.Url"/>
+                  </Action>
+                </Control>
               </Group>
             </OfficeTab>
           </ExtensionPoint>
@@ -92,13 +110,16 @@
       </bt:Images>
       <bt:Urls>
         <bt:Url id="Taskpane.Url" DefaultValue="https://darmmunginsa.github.io/itservices-addin/"/>
+        <bt:Url id="PhishGuard.Url" DefaultValue="https://darmmunginsa.github.io/itservices-phishguard/"/>
       </bt:Urls>
       <bt:ShortStrings>
         <bt:String id="GroupLabel" DefaultValue="iT Services"/>
         <bt:String id="TaskpaneButton.Label" DefaultValue="Create Item"/>
+        <bt:String id="PhishButton.Label" DefaultValue="PhishGuard"/>
       </bt:ShortStrings>
       <bt:LongStrings>
         <bt:String id="TaskpaneButton.Tooltip" DefaultValue="Create a Ticket, Task, or Incident from this email."/>
+        <bt:String id="PhishButton.Tooltip" DefaultValue="Check this email for phishing signals before you click anything."/>
       </bt:LongStrings>
     </Resources>
 
@@ -132,6 +153,23 @@
                     <SourceLocation resid="Taskpane.Url"/>
                   </Action>
                 </Control>
+                <Control xsi:type="MobileButton" id="mobilePhishGuardButton">
+                  <Label resid="PhishButton.Label"/>
+                  <Icon>
+                    <bt:Image size="25" scale="1" resid="Icon.25x25"/>
+                    <bt:Image size="25" scale="2" resid="Icon.25x25"/>
+                    <bt:Image size="25" scale="3" resid="Icon.25x25"/>
+                    <bt:Image size="32" scale="1" resid="Icon.32x32"/>
+                    <bt:Image size="32" scale="2" resid="Icon.32x32"/>
+                    <bt:Image size="32" scale="3" resid="Icon.32x32"/>
+                    <bt:Image size="48" scale="1" resid="Icon.48x48"/>
+                    <bt:Image size="48" scale="2" resid="Icon.48x48"/>
+                    <bt:Image size="48" scale="3" resid="Icon.48x48"/>
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <SourceLocation resid="PhishGuard.Url"/>
+                  </Action>
+                </Control>
               </Group>
             </ExtensionPoint>
           </MobileFormFactor>
@@ -145,10 +183,12 @@
         </bt:Images>
         <bt:Urls>
           <bt:Url id="Taskpane.Url" DefaultValue="https://darmmunginsa.github.io/itservices-addin/"/>
+          <bt:Url id="PhishGuard.Url" DefaultValue="https://darmmunginsa.github.io/itservices-phishguard/"/>
         </bt:Urls>
         <bt:ShortStrings>
           <bt:String id="GroupLabel" DefaultValue="iT Services"/>
           <bt:String id="TaskpaneButton.Label" DefaultValue="Create Item"/>
+          <bt:String id="PhishButton.Label" DefaultValue="PhishGuard"/>
         </bt:ShortStrings>
       </Resources>
     </VersionOverrides>
