@@ -18,6 +18,10 @@ export interface LinkInfo {
   host: string
   /** เหตุผลที่ลิงก์นี้น่าสงสัย (ว่าง = ไม่พบสัญญาณ) */
   flags: string[]
+  /** ทีมตรวจแล้วว่าปลอดภัย (อยู่ใน whitelist) — flags ถูกเก็บไว้ใน suppressed */
+  trusted?: boolean
+  /** สัญญาณที่ตรวจพบแต่ถูกระงับเพราะอยู่ใน whitelist (ยังดูย้อนหลังได้) */
+  suppressed?: string[]
 }
 
 export interface MailInput {
@@ -34,6 +38,11 @@ export interface MailInput {
   internalDomains: string[]
   /** ชื่อ-อีเมลคนในองค์กร (จาก HD_AgentProfiles) — ใช้ตรวจการปลอมเป็นคนใน */
   internalPeople: { name: string; email: string }[]
+  /**
+   * โดเมนที่ทีมตรวจแล้วว่าปลอดภัย (whitelist) — ระงับการเตือน "ลิงก์" ของโดเมนเหล่านี้
+   * ไม่กระทบการตรวจผู้ส่ง/ไฟล์แนบ/เนื้อหา เพราะโดเมนปลอดภัยไม่ได้แปลว่าอีเมลปลอดภัย
+   */
+  safeDomains?: string[]
 }
 
 export interface Analysis {
@@ -311,6 +320,8 @@ export function analyze(m: MailInput): Analysis {
   const raw = extractLinks(m.bodyHtml)
   const seen = new Set<string>()
   const links: LinkInfo[] = []
+  // โดเมนใน whitelist (เทียบระดับโดเมนหลัก → ครอบ subdomain ให้ด้วย)
+  const safeRoots = new Set((m.safeDomains ?? []).map(d => rootDomain(lc(d))).filter(Boolean))
   for (const l of raw) {
     const host = hostOf(l.href)
     const key = `${host}|${l.href}`
@@ -335,7 +346,11 @@ export function analyze(m: MailInput): Analysis {
       flags.push(`ข้อความแสดง "${shown}" แต่ลิงก์ไป "${host}"`)
     }
 
-    links.push({ href: l.href, text: l.text, host, flags })
+    // ทีมยืนยันแล้วว่าโดเมนนี้ปลอดภัย → ระงับการเตือน แต่เก็บสัญญาณไว้ให้ตรวจย้อนหลังได้
+    const trusted = !!host && safeRoots.has(rootDomain(host))
+    links.push(trusted
+      ? { href: l.href, text: l.text, host, flags: [], trusted: true, suppressed: flags }
+      : { href: l.href, text: l.text, host, flags })
   }
 
   const badLinks = links.filter(l => l.flags.length > 0)

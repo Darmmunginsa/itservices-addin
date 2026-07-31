@@ -15,6 +15,8 @@ export interface PhishDeps {
   toast: (msg: string, type?: 'success' | 'error' | 'info') => void
   /** ให้ main.ts วาดหน้าใหม่ */
   rerender: () => void
+  /** มีสิทธิ์เพิ่ม/ถอนโดเมนออกจาก whitelist ไหม (Agent ขึ้นไป) */
+  canWhitelist: () => boolean
 }
 
 const REPORT_LIST = 'HD_PhishingReports'
@@ -30,10 +32,15 @@ interface PhishState {
   kasmTemplate: string
   /** itemId ที่วิเคราะห์ไปแล้ว — กันวิเคราะห์ซ้ำทุกครั้งที่ render */
   analysedItemId: string
+  /** โดเมนที่ทีมยืนยันว่าปลอดภัย (HD_Options: Category='SafeDomain') */
+  safeDomains: string[]
+  safeDomainIds: Record<string, number>
+  savingDomain: string
 }
 const ps: PhishState = {
   mail: null, analysis: null, loading: false, reporting: false,
   reported: false, showHeaders: false, kasmTemplate: '', analysedItemId: '',
+  safeDomains: [], safeDomainIds: {}, savingDomain: '',
 }
 
 export function initPhish(d: PhishDeps): void { deps = d }
@@ -120,6 +127,73 @@ async function fetchKasmTemplate(): Promise<string> {
   } catch { return '' }
 }
 
+const SAFE_CATEGORY = 'SafeDomain'
+
+async function fetchSafeDomains(): Promise<void> {
+  try {
+    const rows = await spList<{ Id: number; Title?: string }>('HD_Options',
+      `$select=Id,Title&$filter=Category eq '${SAFE_CATEGORY}'&$top=500`)
+    const ids: Record<string, number> = {}
+    const list: string[] = []
+    for (const r of rows) {
+      const d = (r.Title ?? '').trim().toLowerCase()
+      if (!d) continue
+      ids[d] = r.Id
+      list.push(d)
+    }
+    ps.safeDomains = list
+    ps.safeDomainIds = ids
+  } catch { /* ลิสต์อ่านไม่ได้ → ถือว่าไม่มี whitelist */ }
+}
+
+/** ทีมยืนยันว่าโดเมนนี้ปลอดภัย */
+export async function trustDomain(domain: string): Promise<void> {
+  const d = domain.trim().toLowerCase()
+  if (!d || ps.savingDomain) return
+  if (!deps.canWhitelist()) { deps.toast('ต้องเป็น Agent ขึ้นไปจึงจะยืนยันโดเมนได้', 'error'); return }
+  ps.savingDomain = d; deps.rerender()
+  try {
+    const token = await deps.getToken()
+    const res = await fetch(`${deps.sharepointUrl}/_api/web/lists/getbytitle('HD_Options')/items`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json;odata=nometadata',
+        'Content-Type': 'application/json;odata=nometadata',
+      },
+      body: JSON.stringify({ Title: d, Category: SAFE_CATEGORY }),
+    })
+    if (!res.ok) throw new Error(String(res.status))
+    await fetchSafeDomains()
+    await analysePhish(true)          // วิเคราะห์ใหม่ให้เห็นผลทันที
+    deps.toast(`ยืนยันแล้วว่า ${d} ปลอดภัย`)
+  } catch {
+    deps.toast('บันทึกไม่สำเร็จ', 'error')
+  } finally { ps.savingDomain = ''; deps.rerender() }
+}
+
+/** ถอนโดเมนออกจาก whitelist */
+export async function untrustDomain(domain: string): Promise<void> {
+  const d = domain.trim().toLowerCase()
+  const id = ps.safeDomainIds[d]
+  if (!id || ps.savingDomain) return
+  if (!deps.canWhitelist()) { deps.toast('ต้องเป็น Agent ขึ้นไปจึงจะถอนโดเมนได้', 'error'); return }
+  ps.savingDomain = d; deps.rerender()
+  try {
+    const token = await deps.getToken()
+    const res = await fetch(`${deps.sharepointUrl}/_api/web/lists/getbytitle('HD_Options')/items(${id})`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata', 'IF-MATCH': '*', 'X-HTTP-Method': 'DELETE' },
+    })
+    if (!res.ok) throw new Error(String(res.status))
+    await fetchSafeDomains()
+    await analysePhish(true)
+    deps.toast(`ถอน ${d} ออกจากรายการปลอดภัยแล้ว`)
+  } catch {
+    deps.toast('ถอนไม่สำเร็จ', 'error')
+  } finally { ps.savingDomain = ''; deps.rerender() }
+}
+
 /** วิเคราะห์อีเมลที่เปิดอยู่ (ข้ามถ้าวิเคราะห์ใบนี้ไปแล้ว) */
 export async function analysePhish(force = false): Promise<void> {
   const item = mailboxItem()
@@ -144,6 +218,7 @@ export async function analysePhish(force = false): Promise<void> {
     headers: {},
     internalDomains: deps.internalDomains,
     internalPeople: [],
+    safeDomains: ps.safeDomains,
   }
   const withHeaders = (h: Record<string, string>): MailInput => ({
     ...base,
@@ -167,6 +242,14 @@ export async function analysePhish(force = false): Promise<void> {
     ps.mail = { ...withHeaders(gh), internalPeople: people }
     ps.analysis = analyze(ps.mail)
     if (!ps.kasmTemplate) ps.kasmTemplate = await fetchKasmTemplate()
+    // โหลด whitelist ครั้งแรก แล้ววิเคราะห์ซ้ำเพื่อระงับการเตือนของโดเมนที่ยืนยันแล้ว
+    if (!ps.safeDomains.length) {
+      await fetchSafeDomains()
+      if (ps.safeDomains.length) {
+        ps.mail = { ...ps.mail, safeDomains: ps.safeDomains }
+        ps.analysis = analyze(ps.mail)
+      }
+    }
     deps.rerender()
   }
 }
@@ -303,7 +386,12 @@ export function phishPanelHTML(loggedIn: boolean): string {
   if (!a || !m) return `<p class="text-sm text-slate-400 text-center py-8">เปิดอีเมลเพื่อเริ่มตรวจ</p>`
 
   const lv = LEVEL_META[a.level]
-  const links = [...a.links.filter(l => l.flags.length), ...a.links.filter(l => !l.flags.length)]
+  const links = [
+    ...a.links.filter(l => l.flags.length),
+    ...a.links.filter(l => !l.flags.length && !l.trusted),
+    ...a.links.filter(l => l.trusted),
+  ]
+  const canWl = deps.canWhitelist()
 
   return `
     <div class="rounded-xl border-2 ${lv.cls} p-3">
@@ -341,16 +429,33 @@ export function phishPanelHTML(loggedIn: boolean): string {
     <div class="bg-white rounded-xl border border-slate-200 p-3">
       <div class="text-xs font-semibold text-slate-700 mb-2">ลิงก์ในอีเมล (${links.length})</div>
       <div class="space-y-2">
-        ${links.map((l, i) => `
-          <div class="rounded-lg border ${l.flags.length ? 'border-red-200 bg-red-50/50' : 'border-slate-100'} p-2">
-            <div class="text-[11px] font-medium ${l.flags.length ? 'text-red-700' : 'text-slate-700'} break-all">${esc(l.host || l.href)}</div>
+        ${links.map((l, i) => {
+          const busy = ps.savingDomain === (l.host ? l.host.toLowerCase() : '')
+          const border = l.trusted ? 'border-emerald-200 bg-emerald-50/50'
+            : l.flags.length ? 'border-red-200 bg-red-50/50' : 'border-slate-100'
+          return `
+          <div class="rounded-lg border ${border} p-2">
+            <div class="text-[11px] font-medium ${l.trusted ? 'text-emerald-800' : l.flags.length ? 'text-red-700' : 'text-slate-700'} break-all">
+              ${l.trusted ? '✔ ' : ''}${esc(l.host || l.href)}
+            </div>
+            ${l.trusted ? `<div class="text-[10px] text-emerald-700">ทีมตรวจแล้วว่าปลอดภัย${
+              (l.suppressed ?? []).length ? ` · ระงับการเตือน ${l.suppressed!.length} ข้อ` : ''}</div>` : ''}
             ${l.text && l.text !== l.href ? `<div class="text-[10px] text-slate-500 break-all">แสดงว่า: "${esc(l.text.slice(0, 70))}"</div>` : ''}
             <div class="text-[10px] text-slate-400 break-all mt-0.5">${esc(l.href.slice(0, 150))}</div>
             ${l.flags.map(f => `<div class="text-[10px] text-red-600 mt-0.5">! ${esc(f)}</div>`).join('')}
-            <button data-kasm="${i}" class="mt-1.5 text-[10px] font-semibold px-2 py-1 rounded-md bg-slate-800 hover:bg-slate-900 text-white">
-              เปิดใน Kasm (แซนด์บ็อกซ์)
-            </button>
-          </div>`).join('')}
+            <div class="flex flex-wrap gap-1 mt-1.5">
+              <button data-kasm="${i}" class="text-[10px] font-semibold px-2 py-1 rounded-md bg-slate-800 hover:bg-slate-900 text-white">
+                เปิดใน Kasm
+              </button>
+              ${canWl && l.host ? (l.trusted
+                ? `<button data-untrust="${esc(l.host)}" ${busy ? 'disabled' : ''}
+                     class="text-[10px] font-semibold px-2 py-1 rounded-md border border-slate-300 text-slate-600 hover:bg-slate-100 disabled:opacity-50">
+                     ${busy ? '...' : 'ถอนออกจากรายการปลอดภัย'}</button>`
+                : `<button data-trust="${esc(l.host)}" ${busy ? 'disabled' : ''}
+                     class="text-[10px] font-semibold px-2 py-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50">
+                     ${busy ? '...' : '✔ ตรวจแล้ว ปลอดภัย'}</button>`) : ''}
+            </div>
+          </div>`}).join('')}
       </div>
       <p class="text-[10px] text-slate-400 mt-2">อย่าคลิกลิงก์จากอีเมลที่ไม่มั่นใจโดยตรง</p>
     </div>` : ''}
@@ -374,7 +479,17 @@ export function bindPhishPanel(): void {
     const ok = await copyText(reportText())
     deps.toast(ok ? 'คัดลอกผลตรวจแล้ว' : 'คัดลอกไม่ได้', ok ? 'success' : 'error')
   })
-  const links = [...(ps.analysis?.links.filter(l => l.flags.length) ?? []), ...(ps.analysis?.links.filter(l => !l.flags.length) ?? [])]
+  document.querySelectorAll('[data-trust]').forEach(btn =>
+    btn.addEventListener('click', () => trustDomain((btn as HTMLElement).dataset['trust'] ?? '')))
+  document.querySelectorAll('[data-untrust]').forEach(btn =>
+    btn.addEventListener('click', () => untrustDomain((btn as HTMLElement).dataset['untrust'] ?? '')))
+
+  const all = ps.analysis?.links ?? []
+  const links = [
+    ...all.filter(l => l.flags.length),
+    ...all.filter(l => !l.flags.length && !l.trusted),
+    ...all.filter(l => l.trusted),
+  ]
   document.querySelectorAll('[data-kasm]').forEach(btn => {
     btn.addEventListener('click', () => {
       const l = links[Number((btn as HTMLElement).dataset['kasm'])]

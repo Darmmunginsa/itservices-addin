@@ -81,6 +81,7 @@ interface AppState {
   loading: boolean
   projects: Project[]
   agents: Agent[]
+  myRole: string
   emailAttachments: { id: string; name: string; size: number; isItem: boolean }[]
   signatureContact: SignatureContact | null
   droppedFiles: File[]
@@ -99,6 +100,7 @@ const state: AppState = {
   loading: false,
   projects: [],
   agents: [],
+  myRole: '',
   emailAttachments: [],
   signatureContact: null,
   droppedFiles: [],
@@ -181,11 +183,14 @@ async function fetchProjects(): Promise<void> {
 async function fetchAgents(): Promise<void> {
   try {
     const token = await getToken()
-    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('HD_AgentProfiles')/items?$select=Title,EmailText&$orderby=Title asc`
+    const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('HD_AgentProfiles')/items?$select=Title,EmailText,Role&$orderby=Title asc`
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata' } })
     if (res.ok) {
-      const data = await res.json() as { value: { Title: string; EmailText: string }[] }
+      const data = await res.json() as { value: { Title: string; EmailText: string; Role?: string }[] }
       state.agents = data.value.map(a => ({ email: a.EmailText, name: a.Title }))
+      // role ของผู้ใช้ปัจจุบัน — ใช้คุมสิทธิ์ whitelist โดเมนในแท็บ PhishGuard
+      const me = (state.account?.username ?? '').toLowerCase()
+      state.myRole = data.value.find(a => (a.EmailText ?? '').toLowerCase() === me)?.Role ?? ''
     }
   } catch { /* silent */ }
 }
@@ -1492,6 +1497,8 @@ async function init(): Promise<void> {
     account: () => state.account ? { name: state.account.name, username: state.account.username } : null,
     toast: (msg, type) => showToast(msg, type ?? 'success'),
     rerender: render,
+    // ยืนยันโดเมนว่าปลอดภัยเป็นการควบคุมความปลอดภัย → จำกัดที่ Agent ขึ้นไป
+    canWhitelist: () => ['Agent', 'Supervisor', 'Boss', 'Admin'].includes(state.myRole),
   })
 
   // Initialize MSAL
