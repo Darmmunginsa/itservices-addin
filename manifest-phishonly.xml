@@ -5,13 +5,13 @@
   xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
   xsi:type="MailApp">
 
-  <Id>88298f8d-a7c5-470a-b9aa-7a62f308e416</Id>
-  <!-- 1.1.0.0 = added the PhishGuard button (version must be bumped or Exchange ignores the update) -->
-  <Version>1.1.0.0</Version>
+  <!-- Id must differ from the Helpdesk add-in (f3a7b2c1-...) -->
+  <Id>a153c2e0-5b24-431d-b45b-f1a7df26e884</Id>
+  <Version>1.0.0.0</Version>
   <ProviderName>iT Services</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
-  <DisplayName DefaultValue="iT Services Suite"/>
-  <Description DefaultValue="Create a Ticket, Task, or Incident from an email, and check the email for phishing signals."/>
+  <DisplayName DefaultValue="iT Services PhishGuard"/>
+  <Description DefaultValue="Analyse the open email for phishing signals and report it to IT."/>
   <IconUrl DefaultValue="https://darmmunginsa.github.io/itservices-addin/icon-80.png"/>
   <HighResolutionIconUrl DefaultValue="https://darmmunginsa.github.io/itservices-addin/icon-128.png"/>
   <SupportUrl DefaultValue="https://darmmunginsa.github.io/itservices-addin/"/>
@@ -26,8 +26,10 @@
     <Host Name="Mailbox"/>
   </Hosts>
 
-  <!-- 1.5 = lowest set the code actually needs: 1.3 convertToRestId,
-       1.4 displayDialogAsync (mobile auth), 1.5 openBrowserWindow / ItemChanged -->
+  <!-- 1.5 = lowest set the code actually needs:
+       1.3 convertToRestId / 1.4 displayDialogAsync (mobile login)
+       1.5 addHandlerAsync(ItemChanged) + ui.openBrowserWindow
+       1.8 (getAllInternetHeadersAsync) is feature-detected at runtime, so not required here -->
   <Requirements>
     <Sets>
       <Set Name="Mailbox" MinVersion="1.5"/>
@@ -37,12 +39,13 @@
   <FormSettings>
     <Form xsi:type="ItemRead">
       <DesktopSettings>
-        <SourceLocation DefaultValue="https://darmmunginsa.github.io/itservices-addin/"/>
+        <SourceLocation DefaultValue="https://darmmunginsa.github.io/itservices-addin/phish.html"/>
         <RequestedHeight>450</RequestedHeight>
       </DesktopSettings>
     </Form>
   </FormSettings>
 
+  <!-- ReadItem is enough: sender, subject, body, attachments -->
   <Permissions>ReadItem</Permissions>
 
   <Rule xsi:type="RuleCollection" Mode="Or">
@@ -63,9 +66,9 @@
           <FunctionFile resid="Taskpane.Url"/>
           <ExtensionPoint xsi:type="MessageReadCommandSurface">
             <OfficeTab id="TabDefault">
-              <Group id="msgReadGroup">
+              <Group id="phishGuardGroup">
                 <Label resid="GroupLabel"/>
-                <Control xsi:type="Button" id="msgReadOpenPaneButton">
+                <Control xsi:type="Button" id="phishGuardOpenPaneButton">
                   <Label resid="TaskpaneButton.Label"/>
                   <Supertip>
                     <Title resid="TaskpaneButton.Label"/>
@@ -78,23 +81,6 @@
                   </Icon>
                   <Action xsi:type="ShowTaskpane">
                     <SourceLocation resid="Taskpane.Url"/>
-                  </Action>
-                </Control>
-                <!-- PhishGuard is a separate app/repo bundled into this one add-in:
-                     SourceLocation may point at any URL listed in AppDomains -->
-                <Control xsi:type="Button" id="msgReadPhishGuardButton">
-                  <Label resid="PhishButton.Label"/>
-                  <Supertip>
-                    <Title resid="PhishButton.Label"/>
-                    <Description resid="PhishButton.Tooltip"/>
-                  </Supertip>
-                  <Icon>
-                    <bt:Image size="16" resid="Icon.16x16"/>
-                    <bt:Image size="32" resid="Icon.32x32"/>
-                    <bt:Image size="80" resid="Icon.80x80"/>
-                  </Icon>
-                  <Action xsi:type="ShowTaskpane">
-                    <SourceLocation resid="PhishGuard.Url"/>
                   </Action>
                 </Control>
               </Group>
@@ -111,17 +97,14 @@
         <bt:Image id="Icon.80x80" DefaultValue="https://darmmunginsa.github.io/itservices-addin/icon-80.png"/>
       </bt:Images>
       <bt:Urls>
-        <bt:Url id="Taskpane.Url" DefaultValue="https://darmmunginsa.github.io/itservices-addin/"/>
-        <bt:Url id="PhishGuard.Url" DefaultValue="https://darmmunginsa.github.io/itservices-addin/phish.html"/>
+        <bt:Url id="Taskpane.Url" DefaultValue="https://darmmunginsa.github.io/itservices-addin/phish.html"/>
       </bt:Urls>
       <bt:ShortStrings>
-        <bt:String id="GroupLabel" DefaultValue="iT Services Suite"/>
-        <bt:String id="TaskpaneButton.Label" DefaultValue="Create Item"/>
-        <bt:String id="PhishButton.Label" DefaultValue="PhishGuard"/>
+        <bt:String id="GroupLabel" DefaultValue="iT Services"/>
+        <bt:String id="TaskpaneButton.Label" DefaultValue="PhishGuard"/>
       </bt:ShortStrings>
       <bt:LongStrings>
-        <bt:String id="TaskpaneButton.Tooltip" DefaultValue="Create a Ticket, Task, or Incident from this email."/>
-        <bt:String id="PhishButton.Tooltip" DefaultValue="Check this email for phishing signals before you click anything."/>
+        <bt:String id="TaskpaneButton.Tooltip" DefaultValue="Check this email for phishing signals before you click anything."/>
       </bt:LongStrings>
     </Resources>
 
@@ -136,9 +119,9 @@
         <Host xsi:type="MailHost">
           <MobileFormFactor>
             <ExtensionPoint xsi:type="MobileMessageReadCommandSurface">
-              <Group id="mobileMsgReadGroup">
+              <Group id="mobilePhishGuardGroup">
                 <Label resid="GroupLabel"/>
-                <Control xsi:type="MobileButton" id="mobileOpenPaneButton">
+                <Control xsi:type="MobileButton" id="mobilePhishGuardButton">
                   <Label resid="TaskpaneButton.Label"/>
                   <Icon>
                     <bt:Image size="25" scale="1" resid="Icon.25x25"/>
@@ -155,23 +138,6 @@
                     <SourceLocation resid="Taskpane.Url"/>
                   </Action>
                 </Control>
-                <Control xsi:type="MobileButton" id="mobilePhishGuardButton">
-                  <Label resid="PhishButton.Label"/>
-                  <Icon>
-                    <bt:Image size="25" scale="1" resid="Icon.25x25"/>
-                    <bt:Image size="25" scale="2" resid="Icon.25x25"/>
-                    <bt:Image size="25" scale="3" resid="Icon.25x25"/>
-                    <bt:Image size="32" scale="1" resid="Icon.32x32"/>
-                    <bt:Image size="32" scale="2" resid="Icon.32x32"/>
-                    <bt:Image size="32" scale="3" resid="Icon.32x32"/>
-                    <bt:Image size="48" scale="1" resid="Icon.48x48"/>
-                    <bt:Image size="48" scale="2" resid="Icon.48x48"/>
-                    <bt:Image size="48" scale="3" resid="Icon.48x48"/>
-                  </Icon>
-                  <Action xsi:type="ShowTaskpane">
-                    <SourceLocation resid="PhishGuard.Url"/>
-                  </Action>
-                </Control>
               </Group>
             </ExtensionPoint>
           </MobileFormFactor>
@@ -184,13 +150,11 @@
           <bt:Image id="Icon.48x48" DefaultValue="https://darmmunginsa.github.io/itservices-addin/icon-80.png"/>
         </bt:Images>
         <bt:Urls>
-          <bt:Url id="Taskpane.Url" DefaultValue="https://darmmunginsa.github.io/itservices-addin/"/>
-          <bt:Url id="PhishGuard.Url" DefaultValue="https://darmmunginsa.github.io/itservices-addin/phish.html"/>
+          <bt:Url id="Taskpane.Url" DefaultValue="https://darmmunginsa.github.io/itservices-addin/phish.html"/>
         </bt:Urls>
         <bt:ShortStrings>
-          <bt:String id="GroupLabel" DefaultValue="iT Services Suite"/>
-          <bt:String id="TaskpaneButton.Label" DefaultValue="Create Item"/>
-          <bt:String id="PhishButton.Label" DefaultValue="PhishGuard"/>
+          <bt:String id="GroupLabel" DefaultValue="iT Services"/>
+          <bt:String id="TaskpaneButton.Label" DefaultValue="PhishGuard"/>
         </bt:ShortStrings>
       </Resources>
     </VersionOverrides>
