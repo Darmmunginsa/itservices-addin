@@ -5,12 +5,12 @@
   xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
   xsi:type="MailApp">
 
-  <Id>f3a7b2c1-d4e5-4f60-a8b9-c0d1e2f34567</Id>
+  <Id>88298f8d-a7c5-470a-b9aa-7a62f308e416</Id>
   <!-- 1.1.0.0 = added the PhishGuard button (version must be bumped or Exchange ignores the update) -->
   <Version>1.1.0.0</Version>
   <ProviderName>iT Services</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
-  <DisplayName DefaultValue="iT Services Helpdesk"/>
+  <DisplayName DefaultValue="iT Services Suite"/>
   <Description DefaultValue="Create a Ticket, Task, or Incident from an email, and check the email for phishing signals."/>
   <IconUrl DefaultValue="https://darmmunginsa.github.io/itservices-addin/icon-80.png"/>
   <HighResolutionIconUrl DefaultValue="https://darmmunginsa.github.io/itservices-addin/icon-128.png"/>
@@ -113,7 +113,7 @@
         <bt:Url id="PhishGuard.Url" DefaultValue="https://darmmunginsa.github.io/itservices-phishguard/"/>
       </bt:Urls>
       <bt:ShortStrings>
-        <bt:String id="GroupLabel" DefaultValue="iT Services"/>
+        <bt:String id="GroupLabel" DefaultValue="iT Services Suite"/>
         <bt:String id="TaskpaneButton.Label" DefaultValue="Create Item"/>
         <bt:String id="PhishButton.Label" DefaultValue="PhishGuard"/>
       </bt:ShortStrings>
@@ -186,7 +186,7 @@
           <bt:Url id="PhishGuard.Url" DefaultValue="https://darmmunginsa.github.io/itservices-phishguard/"/>
         </bt:Urls>
         <bt:ShortStrings>
-          <bt:String id="GroupLabel" DefaultValue="iT Services"/>
+          <bt:String id="GroupLabel" DefaultValue="iT Services Suite"/>
           <bt:String id="TaskpaneButton.Label" DefaultValue="Create Item"/>
           <bt:String id="PhishButton.Label" DefaultValue="PhishGuard"/>
         </bt:ShortStrings>
