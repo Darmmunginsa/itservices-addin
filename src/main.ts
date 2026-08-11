@@ -1,3 +1,4 @@
+import { SLA_OPTIONS, SLA_BY_SEVERITY, computeSlaDue, slaDueLabel } from './sla'
 import { initPhish, analysePhish, phishPanelHTML, bindPhishPanel, submitPhishReport, phishSubmitLabel } from './phishPanel'
 import {
   PublicClientApplication,
@@ -716,6 +717,8 @@ async function handleSubmit(): Promise<void> {
         Status: 'Open',
         AssignedEmail: assignedEmail || undefined,
         AssignedToName: assignedAgent?.name ?? state.account?.name ?? '',
+        // Ticket ผูกกับโครงการได้ (ไม่บังคับ) — งานในโครงการไม่ได้มีแค่ Incident
+        ProjectID: parseInt((document.getElementById('f-project') as HTMLSelectElement)?.value || '0') || null,
       })
       // ไฟล์แนบ → เก็บเป็น Comment ของ ticket (เปิดดูจาก thread ได้)
       if (hasAttachments()) {
@@ -828,6 +831,7 @@ async function handleSubmit(): Promise<void> {
 
       if (!projectId) { showToast('กรุณาเลือก Project', 'error'); return }
 
+      const slaHours = parseInt((document.getElementById('f-sla') as HTMLSelectElement)?.value || '0') || null
       const incidentId = await spCreate('PM_Incidents', {
         Title: title,
         Description: description || undefined,
@@ -838,6 +842,11 @@ async function handleSubmit(): Promise<void> {
         ProjectID: projectId,
         IncidentDate: incidentDate || todayISO(),
         Resolution: resolution || undefined,
+        // SLA — กติกาเดียวกับ webapp: เคสใหม่นับจากตอนนี้
+        SLAHours: slaHours,
+        SLADue: computeSlaDue(slaHours),
+        // เปิดเป็น Resolved เลย ก็ต้องรู้ว่าปิดเมื่อไหร่ ไม่งั้นวัด SLA ไม่ได้
+        ...(status === 'Resolved' ? { ResolvedDate: new Date().toISOString() } : {}),
       })
       if (state.droppedFiles.length > 0) await spUploadFileList('PM_Incidents', incidentId, state.droppedFiles)
       await uploadEmailAttachments('PM_Incidents', incidentId)
@@ -996,7 +1005,7 @@ const TAB_GROUPS: { title: string; tabs: Tab[] }[] = [
 ]
 
 // ─── Render ───────────────────────────────────────────────────────────────────
-const FORM_IDS = ['f-title','f-description','f-priority','f-customer-email','f-cc','f-assigned-email','f-project','f-due-date','f-note','f-severity','f-status','f-incident-date','f-resolution','f-ticket','f-comment','f-comment-type','f-company','f-group','f-start','f-end','f-ext-att','f-attach-eml']
+const FORM_IDS = ['f-title','f-description','f-priority','f-customer-email','f-cc','f-assigned-email','f-project','f-due-date','f-note','f-severity','f-status','f-sla','f-incident-date','f-resolution','f-ticket','f-comment','f-comment-type','f-company','f-group','f-start','f-end','f-ext-att','f-attach-eml']
 let formCache: Record<string, string | boolean> = {}
 function captureForm(): void {
   for (const id of FORM_IDS) {
@@ -1155,6 +1164,7 @@ function render(): void {
         </label>
         <input id="f-cc" type="text" class="${inputCls}" value="${esc(state.emailCc.join(', '))}" placeholder="someone@company.com, boss@company.com" />`)}
       ${field('Assign ให้ Agent', agentSelect(account.username))}
+      ${field('โครงการ (ไม่บังคับ)', projectSelect(true))}
       ${fileField()}
     `
   } else if (tab === 'task') {
@@ -1208,6 +1218,12 @@ function render(): void {
           </select>
         </div>
       </div>
+      ${field('SLA — ต้องแก้ให้จบภายใน', `
+        <select id="f-sla" class="${inputCls}">
+          <option value="">ไม่กำหนด SLA</option>
+          ${SLA_OPTIONS.map(o => `<option value="${o.hours}" ${o.hours === SLA_BY_SEVERITY.Medium ? 'selected' : ''}>${o.labelTh}</option>`).join('')}
+        </select>
+        <p id="f-sla-hint" class="text-[11px] text-slate-400 mt-1">นับจากตอนนี้ · ครบกำหนด ${slaDueLabel(SLA_BY_SEVERITY.Medium)}</p>`)}
       ${field('Assign ให้ Agent', agentSelect(account.username))}
       ${field('วันที่เกิด Incident', `<input id="f-incident-date" type="date" class="${inputCls}" value="${todayISO()}" />`)}
       ${field('รายละเอียด', `<textarea id="f-description" rows="4"
@@ -1301,6 +1317,26 @@ function render(): void {
   document.getElementById('submit-btn')?.addEventListener('click', handleSubmit)
   document.getElementById('btn-import-customer')?.addEventListener('click', importAsCustomer)
   if (tab === 'phish') bindPhishPanel()
+
+  // เลื่อน SLA ตามความรุนแรงให้อัตโนมัติ — เคสจากแอดอินเป็นเคสใหม่เสมอ ไม่มีของเก่าให้ทับ
+  // แต่ถ้าผู้ใช้เลือก SLA เองแล้ว จะไม่ไปยุ่งอีก
+  const sevSel = document.getElementById('f-severity') as HTMLSelectElement | null
+  const slaSel = document.getElementById('f-sla') as HTMLSelectElement | null
+  if (sevSel && slaSel) {
+    let slaTouched = false
+    const hint = document.getElementById('f-sla-hint')
+    const showHint = () => {
+      if (!hint) return
+      const h = parseInt(slaSel.value || '0') || null
+      hint.textContent = h ? `นับจากตอนนี้ · ครบกำหนด ${slaDueLabel(h)}` : 'ไม่กำหนด SLA — เคสนี้จะวัดไม่ได้ในรายงาน'
+    }
+    slaSel.addEventListener('change', () => { slaTouched = true; showHint() })
+    sevSel.addEventListener('change', () => {
+      if (slaTouched) return
+      const suggested = SLA_BY_SEVERITY[sevSel.value]
+      if (suggested) { slaSel.value = String(suggested); showHint() }
+    })
+  }
 
 
 
@@ -1459,12 +1495,15 @@ function agentSelect(currentEmail: string): string {
   </select>`
 }
 
-function projectSelect(): string {
+function projectSelect(optional = false): string {
   if (state.projects.length === 0) {
-    return `<div class="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-2">⚠️ ไม่พบ Project ที่ Active</div>`
+    // Ticket ไม่จำเป็นต้องอยู่ในโครงการ → ไม่ต้องเตือนอะไร แค่ไม่มีให้เลือก
+    return optional
+      ? `<div class="text-xs text-slate-400">ไม่พบ Project ที่ Active</div>`
+      : `<div class="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-2">⚠️ ไม่พบ Project ที่ Active</div>`
   }
   return `<select id="f-project" class="${inputCls}">
-    <option value="">-- เลือก Project --</option>
+    <option value="">${optional ? '-- ไม่ผูกกับโครงการ --' : '-- เลือก Project --'}</option>
     ${state.projects.map(p => `<option value="${p.id}">${esc(p.Title)}</option>`).join('')}
   </select>`
 }
