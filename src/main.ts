@@ -85,7 +85,7 @@ interface AppState {
   projects: Project[]
   agents: Agent[]
   myRole: string
-  emailAttachments: { id: string; name: string; size: number; isItem: boolean }[]
+  emailAttachments: { id: string; name: string; size: number; isItem: boolean; isInline: boolean; defaultOn: boolean }[]
   signatureContact: SignatureContact | null
   droppedFiles: File[]
   tickets: TicketRef[]
@@ -418,9 +418,23 @@ async function uploadEmailAttachments(listTitle: string, itemId: number): Promis
 
   const token = await getToken()
 
+  // รูป inline มักชื่อซ้ำกัน (image001.png) — ชื่อซ้ำในรายการเดียว SharePoint จะปฏิเสธ
+  // ถ้าปล่อยไว้ ไฟล์ที่สองจะหายเงียบ ๆ ทั้งที่คนกดแนบไปแล้ว
+  const used = new Set<string>()
+  const uniqueName = (name: string): string => {
+    if (!used.has(name.toLowerCase())) { used.add(name.toLowerCase()); return name }
+    const dot = name.lastIndexOf('.')
+    const base = dot > 0 ? name.slice(0, dot) : name
+    const ext = dot > 0 ? name.slice(dot) : ''
+    for (let i = 2; ; i++) {
+      const next = base + '-' + i + ext
+      if (!used.has(next.toLowerCase())) { used.add(next.toLowerCase()); return next }
+    }
+  }
+
   for (const cb of Array.from(checked)) {
     const attId = cb.dataset['attId']!
-    const attName = cb.dataset['attName']!
+    const attName = uniqueName(cb.dataset['attName']!)
 
     // Get attachment content from Outlook (file = base64, item = eml string)
     const result = await new Promise<Office.AsyncResult<Office.AttachmentContent>>((resolve, reject) => {
@@ -1442,15 +1456,23 @@ function fileField(): string {
   const emailAtts = state.emailAttachments
   const dropped = state.droppedFiles
 
+  const attRow = (a: typeof emailAtts[number]) => `
+    <label class="flex items-center gap-2 text-xs text-slate-700 cursor-pointer hover:bg-slate-50 rounded px-1 py-0.5">
+      <input type="checkbox" class="email-att-cb" data-att-id="${esc(a.id)}" data-att-name="${esc(a.name)}" data-att-item="${a.isItem ? '1' : '0'}" ${a.defaultOn ? 'checked' : ''} />
+      <span class="flex-1 truncate">${a.isItem ? '📧 ' : a.isInline ? '🖼️ ' : ''}${esc(a.name)}</span>
+      <span class="text-slate-400 flex-shrink-0">${formatBytes(a.size)}</span>
+    </label>`
+
+  const realAtts = emailAtts.filter(a => !a.isInline)
+  const inlineAtts = emailAtts.filter(a => a.isInline)
+
   const emailAttHtml = emailAtts.length > 0
     ? `<div class="mb-2 space-y-1">
-        <p class="text-xs text-slate-500">📎 ไฟล์แนบจาก Email:</p>
-        ${emailAtts.map(a => `
-          <label class="flex items-center gap-2 text-xs text-slate-700 cursor-pointer hover:bg-slate-50 rounded px-1 py-0.5">
-            <input type="checkbox" class="email-att-cb" data-att-id="${esc(a.id)}" data-att-name="${esc(a.name)}" data-att-item="${a.isItem ? '1' : '0'}" checked />
-            <span class="flex-1 truncate">${a.isItem ? '📧 ' : ''}${esc(a.name)}</span>
-            <span class="text-slate-400 flex-shrink-0">${formatBytes(a.size)}</span>
-          </label>`).join('')}
+        ${realAtts.length ? `<p class="text-xs text-slate-500">📎 ไฟล์แนบจาก Email:</p>
+        ${realAtts.map(attRow).join('')}` : ''}
+        ${inlineAtts.length ? `<p class="text-xs text-slate-500 ${realAtts.length ? 'pt-1' : ''}">🖼️ รูปในเนื้อเมล
+          <span class="text-slate-400">(รูปเล็กมักเป็นโลโก้ในลายเซ็น — ติ๊กเพิ่มได้)</span></p>
+        ${inlineAtts.map(attRow).join('')}` : ''}
       </div>`
     : ''
 
@@ -1589,11 +1611,13 @@ async function init(): Promise<void> {
 
           // Email attachments — รวมทั้งไฟล์ (File) และอีเมลที่แนบมา (Item → .eml)
           const attachments = item.attachments ?? []
+          // รูปที่วางไว้กลางเนื้อเมล (inline) เดิมถูกทิ้งทั้งหมดเพราะเหมาว่าเป็นโลโก้ในลายเซ็น
+          // แต่ภาพหน้าจอที่ลูกค้า paste มาก็เป็น inline เหมือนกัน และมักเป็นหลักฐานชิ้นเดียวที่มี
+          // แยกด้วยขนาดแทน: โลโก้ลายเซ็นมักเล็ก ภาพหน้าจอมักใหญ่ — เดาให้ แล้วให้คนติ๊กแก้ได้
+          const INLINE_KEEP_BYTES = 20 * 1024
           state.emailAttachments = attachments
-            // กรองรูป inline (โลโก้/รูปในลายเซ็น) ออก — ไม่ใช่ไฟล์แนบจริง
-            .filter(a => !a.isInline
-              && (a.attachmentType === Office.MailboxEnums.AttachmentType.File
-                || a.attachmentType === Office.MailboxEnums.AttachmentType.Item))
+            .filter(a => a.attachmentType === Office.MailboxEnums.AttachmentType.File
+              || a.attachmentType === Office.MailboxEnums.AttachmentType.Item)
             .map(a => ({
               id: a.id,
               name: a.attachmentType === Office.MailboxEnums.AttachmentType.Item
@@ -1601,6 +1625,8 @@ async function init(): Promise<void> {
                 : a.name,
               size: a.size,
               isItem: a.attachmentType === Office.MailboxEnums.AttachmentType.Item,
+              isInline: !!a.isInline,
+              defaultOn: !a.isInline || a.size >= INLINE_KEEP_BYTES,
             }))
 
           // Body preview (async) — recursive DOM walker, handles tables natively
