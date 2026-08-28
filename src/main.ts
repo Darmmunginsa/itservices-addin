@@ -1,3 +1,4 @@
+import { stripQuoted } from './emailQuote'
 import { SLA_OPTIONS, SLA_BY_SEVERITY, computeSlaDue, slaDueLabel } from './sla'
 import { initPhish, analysePhish, phishPanelHTML, bindPhishPanel, submitPhishReport, phishSubmitLabel } from './phishPanel'
 import {
@@ -77,6 +78,7 @@ interface AppState {
   tab: Tab
   emailSubject: string
   emailBodyPreview: string
+  emailBodyReply: string
   emailSenderName: string
   emailSenderEmail: string
   loading: boolean
@@ -96,6 +98,7 @@ const state: AppState = {
   tab: 'ticket',
   emailSubject: '',
   emailBodyPreview: '',
+  emailBodyReply: '',
   emailSenderName: '',
   emailSenderEmail: '',
   loading: false,
@@ -1035,6 +1038,8 @@ function render(): void {
   captureForm()  // preserve typed values across re-render
 
   const { account, tab, emailSubject, emailSenderName, emailSenderEmail, emailBodyPreview } = state
+  // แท็บคอมเมนต์ใช้เฉพาะข้อความใหม่ · แท็บที่เปิดเคสใหม่ใช้เนื้อเมลเต็ม
+  const emailBodyReply = state.emailBodyReply || emailBodyPreview
   const isLoggedIn = account !== null
 
   // ── Header ──
@@ -1243,7 +1248,7 @@ function render(): void {
         <option value="External">External</option>
       </select>`)}
       ${field('Comment *', `<textarea id="f-comment" rows="5"
-        class="${inputCls} resize-y" placeholder="พิมพ์ comment...">${esc(emailBodyPreview)}</textarea>`)}
+        class="${inputCls} resize-y" placeholder="พิมพ์ comment...">${esc(emailBodyReply)}</textarea>`)}
       ${fileField()}
     `
   } else if (tab === 'project') {
@@ -1281,7 +1286,7 @@ function render(): void {
         <option value="External">External</option>
       </select>`)}
       ${field('Comment *', `<textarea id="f-comment" rows="5"
-        class="${inputCls} resize-y" placeholder="พิมพ์ comment...">${esc(emailBodyPreview)}</textarea>`)}
+        class="${inputCls} resize-y" placeholder="พิมพ์ comment...">${esc(emailBodyReply)}</textarea>`)}
       ${fileField()}
     `
   }
@@ -1682,16 +1687,14 @@ async function init(): Promise<void> {
               const cleaned = paragraphs.join('\n')
 
               // Split body vs signature
+              // ลายเซ็น/เมลเก่า ใช้ "หา" ข้อมูลติดต่อเท่านั้น — ไม่ตัดออกจากเนื้อเรื่อง
+              // เปิดเคสใหม่ต้องได้เมลต้นฉบับครบ ไม่งั้นคนอ่านทีหลังขาดบริบทที่ลูกค้าส่งมาจริง
               const cutRe = /\n([-_]{3,}|From:\s|Best regards|Regards,|ขอแสดงความนับถือ|Sent:\s)/i
               const cutIdx = cleaned.search(cutRe)
-              if (cutIdx > 80) {
-                state.emailBodyPreview = cleaned.slice(0, cutIdx).trim().slice(0, 2000)
-                const sigText = cleaned.slice(cutIdx).trim()
-                state.signatureContact = parseSignature(sigText)
-              } else {
-                state.emailBodyPreview = cleaned.trim().slice(0, 2000)
-                state.signatureContact = null
-              }
+              state.signatureContact = cutIdx > 80 ? parseSignature(cleaned.slice(cutIdx).trim()) : null
+              state.emailBodyPreview = cleaned.trim().slice(0, 20000)
+              // ส่วนคอมเมนต์เอาเฉพาะข้อความใหม่ ไม่งั้นตอบกันไปมาแล้วคอมเมนต์บวม
+              state.emailBodyReply = stripQuoted(state.emailBodyPreview)
 
             }
             render()
@@ -1714,6 +1717,7 @@ function renderDevMode(): void {
   state.emailSenderName = 'Test Sender'
   state.emailSenderEmail = 'test@example.com'
   state.emailBodyPreview = 'This is a placeholder email body for development mode.'
+  state.emailBodyReply = state.emailBodyPreview
 }
 
 init().catch(err => {
