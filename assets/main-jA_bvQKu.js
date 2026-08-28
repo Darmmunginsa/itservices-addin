@@ -1,0 +1,339 @@
+import{P as Me}from"./PublicClientApplication-DLKYUtZW.js";import{a as ee,d as He,p as Ne,L as ke,S as Ee}from"./analyzer-CWd3MChg.js";const Fe=/^\s*(Sent|To|Date|Cc|Subject|ส่ง|ถึง|วันที่|สำเนา|เรื่อง)\s*:/i;function ze(t,e){const a=t[e];if(/^\s*-{2,}\s*(Original Message|Forwarded message|ข้อความต้นฉบับ)\s*-{2,}/i.test(a)||/^\s*_{5,}\s*$/.test(a)||/^\s*(On|เมื่อ)\b.{10,200}(wrote|เขียนว่า)\s*:\s*$/i.test(a))return!0;if(/^\s*(From|จาก)\s*:\s*\S/i.test(a)){for(let n=e+1;n<=e+3&&n<t.length;n++)if(Fe.test(t[n]))return!0;return!1}return!1}function qe(t){const e=(t??"").replace(/\r\n/g,`
+`),a=e.split(`
+`);let n=-1;for(let s=0;s<a.length;s++){if(s>0&&ze(a,s)){n=s;break}if(s>0&&/^\s*>/.test(a[s])&&/^\s*>/.test(a[s+1]??"")){n=s;break}}if(n<0)return{visible:e.trim(),quoted:""};const o=a.slice(0,n).join(`
+`).trim(),r=a.slice(n).join(`
+`).trim();return o?{visible:o,quoted:r}:{visible:e.trim(),quoted:""}}const Ue=t=>qe(t).visible,Ge=[{hours:1,labelTh:"1 ชั่วโมง"},{hours:2,labelTh:"2 ชั่วโมง"},{hours:4,labelTh:"4 ชั่วโมง"},{hours:8,labelTh:"8 ชั่วโมง (1 วันทำการ)"},{hours:24,labelTh:"24 ชั่วโมง"},{hours:48,labelTh:"2 วัน"},{hours:72,labelTh:"3 วัน"},{hours:168,labelTh:"7 วัน"}],te={Critical:1,High:4,Medium:24,Low:72};function Ie(t,e=new Date){const a=typeof t=="number"&&Number.isFinite(t)&&t>0?t:null;return a?new Date(e.getTime()+a*36e5).toISOString():null}function be(t){const e=Ie(t);return e?new Date(e).toLocaleString("th-TH",{dateStyle:"short",timeStyle:"short"}):""}const Ae="HD_PhishingReports";let f;const l={mail:null,analysis:null,loading:!1,reporting:!1,reported:!1,showHeaders:!1,kasmTemplate:"",analysedItemId:"",safeDomains:[],safeDomainIds:{},savingDomain:""};function Ve(t){f=t}const F=t=>(t??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"),W=()=>{var t,e;return(e=(t=Office.context)==null?void 0:t.mailbox)==null?void 0:e.item},ye=t=>new Promise(e=>{const a=W();if(!(a!=null&&a.body)){e("");return}a.body.getAsync(t,n=>e(n.status===Office.AsyncResultStatus.Succeeded?n.value??"":""))});function We(t){return t?t.split(",").map(e=>{const a=e.trim(),n=a.match(/^(.*?)\s*<([^>]+)>$/);return n?{name:n[1].replace(/^"|"$/g,"").trim(),email:n[2].trim()}:{name:"",email:a.replace(/[<>]/g,"").trim()}}).filter(e=>e.email.includes("@")):[]}function Ke(){return new Promise(t=>{let e=!1;try{e=Office.context.requirements.isSetSupported("Mailbox","1.8")}catch{e=!1}const a=W();if(!e||typeof(a==null?void 0:a.getAllInternetHeadersAsync)!="function"){t({});return}try{a.getAllInternetHeadersAsync(n=>t(n.status===Office.AsyncResultStatus.Succeeded?Ne(n.value??""):{}))}catch{t({})}})}async function Je(){try{const t=W();if(!(t!=null&&t.itemId))return{};const e=Office.context.mailbox.convertToRestId(t.itemId,Office.MailboxEnums.RestVersion.v2_0),a=await f.getGraphToken(),n=await fetch(`https://graph.microsoft.com/v1.0/me/messages/${e}?$select=internetMessageHeaders`,{headers:{Authorization:`Bearer ${a}`}});if(!n.ok)return{};const o=await n.json(),r={};for(const s of o.internetMessageHeaders??[])r[s.name]=r[s.name]?`${r[s.name]}
+${s.value}`:s.value;return r}catch{return{}}}async function me(t,e){const a=await f.getToken(),n=await fetch(`${f.sharepointUrl}/_api/web/lists/getbytitle('${t}')/items?${e}`,{headers:{Authorization:`Bearer ${a}`,Accept:"application/json;odata=nometadata"}});return n.ok?(await n.json()).value:[]}async function Ze(){try{return(await me("HD_AgentProfiles","$select=Title,EmailText&$top=500")).filter(e=>e.EmailText).map(e=>({name:e.Title,email:e.EmailText}))}catch{return[]}}async function Ye(){var t;try{return(((t=(await me("HD_Options","$select=Title&$filter=Category eq 'KasmConfig'&$top=1"))[0])==null?void 0:t.Title)??"").trim()}catch{return""}}const Se="SafeDomain";async function ue(){try{const t=await me("HD_Options",`$select=Id,Title&$filter=Category eq '${Se}'&$top=500`),e={},a=[];for(const n of t){const o=(n.Title??"").trim().toLowerCase();o&&(e[o]=n.Id,a.push(o))}l.safeDomains=a,l.safeDomainIds=e}catch{}}async function Qe(t){const e=t.trim().toLowerCase();if(!(!e||l.savingDomain)){if(!f.canWhitelist()){f.toast("ต้องเป็น Agent ขึ้นไปจึงจะยืนยันโดเมนได้","error");return}l.savingDomain=e,f.rerender();try{const a=await f.getToken(),n=await fetch(`${f.sharepointUrl}/_api/web/lists/getbytitle('HD_Options')/items`,{method:"POST",headers:{Authorization:`Bearer ${a}`,Accept:"application/json;odata=nometadata","Content-Type":"application/json;odata=nometadata"},body:JSON.stringify({Title:e,Category:Se})});if(!n.ok)throw new Error(String(n.status));await ue(),await X(!0),f.toast(`ยืนยันแล้วว่า ${e} ปลอดภัย`)}catch{f.toast("บันทึกไม่สำเร็จ","error")}finally{l.savingDomain="",f.rerender()}}}async function Xe(t){const e=t.trim().toLowerCase(),a=l.safeDomainIds[e];if(!(!a||l.savingDomain)){if(!f.canWhitelist()){f.toast("ต้องเป็น Agent ขึ้นไปจึงจะถอนโดเมนได้","error");return}l.savingDomain=e,f.rerender();try{const n=await f.getToken(),o=await fetch(`${f.sharepointUrl}/_api/web/lists/getbytitle('HD_Options')/items(${a})`,{method:"POST",headers:{Authorization:`Bearer ${n}`,Accept:"application/json;odata=nometadata","IF-MATCH":"*","X-HTTP-Method":"DELETE"}});if(!o.ok)throw new Error(String(o.status));await ue(),await X(!0),f.toast(`ถอน ${e} ออกจากรายการปลอดภัยแล้ว`)}catch{f.toast("ถอนไม่สำเร็จ","error")}finally{l.savingDomain="",f.rerender()}}}async function X(t=!1){var h,m;const e=W(),a=(e==null?void 0:e.itemId)??"";if(!t&&l.analysedItemId===a&&l.analysis)return;l.loading=!0,l.reported=!1,l.analysedItemId=a,f.rerender();const[n,o]=await Promise.all([ye(Office.CoercionType.Html),ye(Office.CoercionType.Text)]),r={fromName:((h=e==null?void 0:e.from)==null?void 0:h.displayName)??"",fromEmail:((m=e==null?void 0:e.from)==null?void 0:m.emailAddress)??"",replyTo:[],subject:(e==null?void 0:e.subject)??"",bodyHtml:n,bodyText:o,attachments:((e==null?void 0:e.attachments)??[]).map(u=>({name:u.name,size:u.size??0,isInline:!!u.isInline})),headers:{},internalDomains:f.internalDomains,internalPeople:[],safeDomains:l.safeDomains},s=u=>{var w;return{...r,headers:u,replyTo:We(((w=Object.entries(u).find(([P])=>P.toLowerCase()==="reply-to"))==null?void 0:w[1])??"")}},c=await Ke();if(l.mail=s(c),l.analysis=ee(l.mail),l.loading=!1,f.rerender(),f.account()){const[u,w]=await Promise.all([Ze(),Object.keys(c).length?Promise.resolve(c):Je()]);l.mail={...s(w),internalPeople:u},l.analysis=ee(l.mail),l.kasmTemplate||(l.kasmTemplate=await Ye()),l.safeDomains.length||(await ue(),l.safeDomains.length&&(l.mail={...l.mail,safeDomains:l.safeDomains},l.analysis=ee(l.mail))),f.rerender()}}function Ce(){const t=l.mail,e=l.analysis;return!t||!e?"":[`ผู้ส่ง: ${t.fromName} <${t.fromEmail}>`,`หัวข้อ: ${t.subject}`,t.replyTo.length?`Reply-To: ${t.replyTo.map(a=>a.email).join(", ")}`:"",`คะแนนความเสี่ยง: ${e.score} (${ke[e.level].label})`,"","สิ่งที่ตรวจพบ:",...e.findings.map(a=>`- [${Ee[a.severity].label}] (${a.category}) ${a.title} — ${a.detail.replace(/\n/g," ")}`),"",e.links.length?"ลิงก์ในอีเมล:":"",...e.links.map(a=>`- ${a.href}${a.flags.length?`  ! ${a.flags.join(" / ")}`:""}`)].filter(a=>a!=="").join(`
+`)}async function et(t){try{const e=W();if(!(e!=null&&e.itemId))return!1;const a=Office.context.mailbox.convertToRestId(e.itemId,Office.MailboxEnums.RestVersion.v2_0),n=await f.getGraphToken(),o=await fetch(`https://graph.microsoft.com/v1.0/me/messages/${a}/$value`,{headers:{Authorization:`Bearer ${n}`}});if(!o.ok)return!1;const r=await o.arrayBuffer(),s=(e.subject||"phishing").replace(/[\\/:*?"<>|#%&{}~]/g,"_").replace(/^_+/,"").slice(0,80).trim()||"phishing",c=await f.getToken();return(await fetch(`${f.sharepointUrl}/_api/web/lists/getbytitle('${Ae}')/items(${t})/AttachmentFiles/add(FileName='${encodeURIComponent(s+".eml")}')`,{method:"POST",headers:{Authorization:`Bearer ${c}`,Accept:"application/json;odata=nometadata"},body:r})).ok}catch{return!1}}async function xe(t){const e=await f.getToken(),a=await fetch(`${f.sharepointUrl}/_api/web/lists/getbytitle('${Ae}')/items`,{method:"POST",headers:{Authorization:`Bearer ${e}`,Accept:"application/json;odata=nometadata","Content-Type":"application/json;odata=nometadata"},body:JSON.stringify(t)});if(!a.ok)throw new Error(`SharePoint ${a.status}: ${await a.text()}`);return(await a.json()).Id}async function tt(){if(!(!l.mail||!l.analysis||l.reporting)){if(!f.account()){f.toast("กรุณาเข้าสู่ระบบก่อนรายงาน","error");return}l.reporting=!0,f.rerender();try{const t=l.mail,e=l.analysis,a=f.account(),n={Title:(t.subject||"(ไม่มีหัวข้อ)").slice(0,255),SenderName:t.fromName.slice(0,255),SenderEmail:t.fromEmail.slice(0,255),SenderDomain:He(t.fromEmail),RiskScore:e.score,RiskLevel:e.level,Findings:Ce(),LinkCount:e.links.length,SuspiciousLinks:e.links.filter(c=>c.flags.length).map(c=>c.href).join(`
+`).slice(0,4e3),ReportedBy:(a==null?void 0:a.name)??"",ReportedEmail:(a==null?void 0:a.username)??"",Status:"New"};let o,r=!1;try{o=await xe(n)}catch(c){o=await xe({Title:n.Title,Findings:n.Findings}).catch(()=>{throw c}),r=!0}const s=await et(o);l.reported=!0,f.toast(r?"ส่งรายงานแล้ว แต่บันทึกได้บางคอลัมน์ — ตรวจชื่อคอลัมน์ใน HD_PhishingReports":s?"ส่งรายงานพร้อมอีเมลต้นฉบับแล้ว":"ส่งรายงานแล้ว (แนบ .eml ไม่ได้)",r?"info":"success")}catch(t){f.toast(`ส่งรายงานไม่สำเร็จ: ${t instanceof Error?t.message:String(t)}`,"error")}finally{l.reporting=!1,f.rerender()}}}const at=()=>l.reported?"✓ รายงานแล้ว":l.reporting?"กำลังส่ง…":"🚩 รายงานอีเมลนี้ให้ IT";function nt(t){var e;try{const a=(e=Office.context)==null?void 0:e.ui;if(typeof(a==null?void 0:a.openBrowserWindow)=="function"){a.openBrowserWindow(t);return}}catch{}window.open(t,"_blank","noopener,noreferrer")||f.toast("เปิดหน้าต่างไม่ได้ (ถูกบล็อก)","info")}async function st(t){var e;try{if((e=navigator.clipboard)!=null&&e.writeText)return await navigator.clipboard.writeText(t),!0}catch{}try{const a=document.createElement("textarea");a.value=t,a.setAttribute("readonly",""),a.style.position="fixed",a.style.opacity="0",document.body.appendChild(a),a.focus(),a.select();const n=document.execCommand("copy");return a.remove(),n}catch{return!1}}function ot(t){if(l.loading&&!l.analysis)return`<div class="py-10 text-center text-slate-500 text-sm">
+      <div class="w-7 h-7 border-[3px] border-slate-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-2"></div>
+      กำลังตรวจอีเมล…</div>`;const e=l.analysis,a=l.mail;if(!e||!a)return'<p class="text-sm text-slate-400 text-center py-8">เปิดอีเมลเพื่อเริ่มตรวจ</p>';const n=ke[e.level],o=[...e.links.filter(s=>s.flags.length),...e.links.filter(s=>!s.flags.length&&!s.trusted),...e.links.filter(s=>s.trusted)],r=f.canWhitelist();return`
+    <div class="rounded-xl border-2 ${n.cls} p-3">
+      <div class="flex items-center gap-2">
+        <span class="text-2xl leading-none">${n.icon}</span>
+        <div class="min-w-0 flex-1">
+          <div class="font-bold text-sm">${F(n.label)}</div>
+          <div class="text-xs opacity-80">คะแนน ${e.score} · พบสัญญาณ ${e.findings.filter(s=>s.severity!=="info").length} ข้อ</div>
+        </div>
+        <button id="phish-recheck" class="text-[10px] px-2 py-1 rounded-md bg-white/70 hover:bg-white text-slate-700 font-medium">ตรวจใหม่</button>
+      </div>
+    </div>
+
+    ${t?"":`<div class="bg-blue-50 border border-blue-200 rounded-xl p-2.5 text-[11px] text-blue-800">
+      เข้าสู่ระบบเพื่อตรวจการปลอมเป็นพนักงาน และรายงานเข้า Helpdesk ได้
+    </div>`}
+
+    ${e.findings.length===0?'<p class="text-xs text-slate-400 text-center py-3">ไม่พบสัญญาณผิดปกติจากการตรวจอัตโนมัติ</p>':e.findings.map(s=>{const c=Ee[s.severity];return`<div class="bg-white rounded-xl border border-slate-200 p-2.5">
+          <div class="flex items-start gap-2">
+            <span class="text-[9px] font-bold px-1.5 py-0.5 rounded-full ${c.cls} flex-shrink-0 mt-0.5">${c.label}</span>
+            <div class="min-w-0 flex-1">
+              <div class="text-xs font-semibold text-slate-800">${F(s.title)}</div>
+              <div class="text-[11px] text-slate-500 whitespace-pre-line break-all">${F(s.detail)}</div>
+              <div class="text-[9px] text-slate-400 mt-0.5">${F(s.category)}</div>
+            </div>
+          </div>
+        </div>`}).join("")}
+
+    ${o.length?`
+    <div class="bg-white rounded-xl border border-slate-200 p-3">
+      <div class="text-xs font-semibold text-slate-700 mb-2">ลิงก์ในอีเมล (${o.length})</div>
+      <div class="space-y-2">
+        ${o.map((s,c)=>{const h=l.savingDomain===(s.host?s.host.toLowerCase():"");return`
+          <div class="rounded-lg border ${s.trusted?"border-emerald-200 bg-emerald-50/50":s.flags.length?"border-red-200 bg-red-50/50":"border-slate-100"} p-2">
+            <div class="text-[11px] font-medium ${s.trusted?"text-emerald-800":s.flags.length?"text-red-700":"text-slate-700"} break-all">
+              ${s.trusted?"✔ ":""}${F(s.host||s.href)}
+            </div>
+            ${s.trusted?`<div class="text-[10px] text-emerald-700">ทีมตรวจแล้วว่าปลอดภัย${(s.suppressed??[]).length?` · ระงับการเตือน ${s.suppressed.length} ข้อ`:""}</div>`:""}
+            ${s.text&&s.text!==s.href?`<div class="text-[10px] text-slate-500 break-all">แสดงว่า: "${F(s.text.slice(0,70))}"</div>`:""}
+            <div class="text-[10px] text-slate-400 break-all mt-0.5">${F(s.href.slice(0,150))}</div>
+            ${s.flags.map(u=>`<div class="text-[10px] text-red-600 mt-0.5">! ${F(u)}</div>`).join("")}
+            <div class="flex flex-wrap gap-1 mt-1.5">
+              <button data-kasm="${c}" class="text-[10px] font-semibold px-2 py-1 rounded-md bg-slate-800 hover:bg-slate-900 text-white">
+                เปิดใน Kasm
+              </button>
+              ${r&&s.host?s.trusted?`<button data-untrust="${F(s.host)}" ${h?"disabled":""}
+                     class="text-[10px] font-semibold px-2 py-1 rounded-md border border-slate-300 text-slate-600 hover:bg-slate-100 disabled:opacity-50">
+                     ${h?"...":"ถอนออกจากรายการปลอดภัย"}</button>`:`<button data-trust="${F(s.host)}" ${h?"disabled":""}
+                     class="text-[10px] font-semibold px-2 py-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50">
+                     ${h?"...":"✔ ตรวจแล้ว ปลอดภัย"}</button>`:""}
+            </div>
+          </div>`}).join("")}
+      </div>
+      <p class="text-[10px] text-slate-400 mt-2">อย่าคลิกลิงก์จากอีเมลที่ไม่มั่นใจโดยตรง</p>
+    </div>`:""}
+
+    <div class="flex gap-2">
+      <button id="phish-copy" class="flex-1 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-medium py-1.5 rounded-lg">คัดลอกผลตรวจ</button>
+      <button id="phish-headers" class="flex-1 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-medium py-1.5 rounded-lg">${l.showHeaders?"ซ่อน header":"ดู header"}</button>
+    </div>
+    ${l.showHeaders?`<pre class="bg-slate-900 text-slate-100 text-[9px] p-2 rounded-lg overflow-x-auto whitespace-pre-wrap break-all max-h-56 overflow-y-auto">${F(Object.entries(a.headers).map(([s,c])=>`${s}: ${c}`).join(`
+`)||"อ่าน header ไม่ได้")}</pre>`:""}
+    <p class="text-[10px] text-slate-400 text-center">วิเคราะห์ในเครื่องทั้งหมด — ไม่ส่งเนื้อหาอีเมลออกนอกองค์กร</p>
+  `}function it(){var a,n,o,r;(a=document.getElementById("phish-recheck"))==null||a.addEventListener("click",()=>{X(!0)}),(n=document.getElementById("phish-headers"))==null||n.addEventListener("click",()=>{l.showHeaders=!l.showHeaders,f.rerender()}),(o=document.getElementById("phish-copy"))==null||o.addEventListener("click",async()=>{const s=await st(Ce());f.toast(s?"คัดลอกผลตรวจแล้ว":"คัดลอกไม่ได้",s?"success":"error")}),document.querySelectorAll("[data-trust]").forEach(s=>s.addEventListener("click",()=>Qe(s.dataset.trust??""))),document.querySelectorAll("[data-untrust]").forEach(s=>s.addEventListener("click",()=>Xe(s.dataset.untrust??"")));const t=((r=l.analysis)==null?void 0:r.links)??[],e=[...t.filter(s=>s.flags.length),...t.filter(s=>!s.flags.length&&!s.trusted),...t.filter(s=>s.trusted)];document.querySelectorAll("[data-kasm]").forEach(s=>{s.addEventListener("click",()=>{const c=e[Number(s.dataset.kasm)];if(!c)return;if(!l.kasmTemplate){f.toast("ยังไม่ได้ตั้งค่า Kasm ใน HD_Options (Category=KasmConfig)","info");return}const h=l.kasmTemplate;nt(h.includes("{url}")?h.replace("{url}",encodeURIComponent(c.href)):h+encodeURIComponent(c.href))})})}const rt="0bab07cf-65e6-487c-89af-c917fc1a5a13",ct="d569b991-89fc-4a62-9df5-eb361abcef40",H="https://rpaexpert.sharepoint.com/sites/iTServicesCo.Ltd",Q="https://rpaexpert.sharepoint.com/.default",ae=["https://graph.microsoft.com/Calendars.ReadWrite","https://graph.microsoft.com/Mail.Send","https://graph.microsoft.com/Mail.Read"],L=new Me({auth:{clientId:rt,authority:`https://login.microsoftonline.com/${ct}`,redirectUri:window.location.origin.includes("localhost")?"http://localhost:3000/":"https://darmmunginsa.github.io/itservices-addin/",navigateToLoginRequestUrl:!1},cache:{cacheLocation:"localStorage",storeAuthStateInCookie:!1}}),lt=window.location.origin.includes("localhost")?`${window.location.origin}/auth.html`:"https://darmmunginsa.github.io/itservices-addin/auth.html";function pe(){var e,a;const t=(a=(e=Office.context)==null?void 0:e.diagnostics)==null?void 0:a.platform;return t===Office.PlatformType.iOS||t===Office.PlatformType.Android}function fe(){return new Promise((t,e)=>{Office.context.ui.displayDialogAsync(lt,{height:60,width:30,promptBeforeOpen:!1},a=>{if(a.status!==Office.AsyncResultStatus.Succeeded){e(new Error("เปิดหน้าเข้าสู่ระบบไม่ได้"));return}const n=a.value;n.addEventHandler(Office.EventType.DialogMessageReceived,o=>{n.close();const r=o.message;if(!r){e(new Error("auth message error"));return}try{const s=JSON.parse(r);s.ok?t():e(new Error(s.error||"auth failed"))}catch{e(new Error("auth message error"))}}),n.addEventHandler(Office.EventType.DialogEventReceived,()=>e(new Error("ปิดหน้าเข้าสู่ระบบก่อนเสร็จ")))})})}const i={account:null,tab:"ticket",emailSubject:"",emailBodyPreview:"",emailBodyReply:"",emailSenderName:"",emailSenderEmail:"",loading:!1,projects:[],agents:[],myRole:"",emailAttachments:[],signatureContact:null,droppedFiles:[],tickets:[],contactEmails:[],emailCc:[]};async function N(){const t=L.getAllAccounts();if(t.length===0)throw new Error("Not signed in");const e={scopes:[Q],account:t[0]};try{return(await L.acquireTokenSilent(e)).accessToken}catch{if(pe()){await fe();const a=L.getAllAccounts()[0];if(!a)throw new Error("เข้าสู่ระบบไม่สำเร็จ");return(await L.acquireTokenSilent({scopes:[Q],account:a})).accessToken}return(await L.acquireTokenPopup(e)).accessToken}}async function V(t=!1){const e=L.getAllAccounts();if(e.length===0)throw new Error("Not signed in");const a={scopes:ae,account:e[0],forceRefresh:t};try{return(await L.acquireTokenSilent(a)).accessToken}catch{if(pe()){await fe();const o=L.getAllAccounts()[0];if(!o)throw new Error("เข้าสู่ระบบไม่สำเร็จ");return(await L.acquireTokenSilent({scopes:ae,account:o})).accessToken}return(await L.acquireTokenPopup({scopes:ae,account:e[0]})).accessToken}}async function dt(t){const e=await V(),a={subject:t.subject,start:{dateTime:t.start,timeZone:"Asia/Bangkok"},end:{dateTime:t.end,timeZone:"Asia/Bangkok"},body:t.body?{contentType:"HTML",content:t.body.replace(/\n/g,"<br>")}:void 0,attendees:t.attendees.filter(Boolean).map(o=>({emailAddress:{address:o},type:"required"})),isOnlineMeeting:t.isOnlineMeeting,onlineMeetingProvider:t.isOnlineMeeting?"teamsForBusiness":void 0},n=await fetch("https://graph.microsoft.com/v1.0/me/events",{method:"POST",headers:{Authorization:`Bearer ${e}`,"Content-Type":"application/json"},body:JSON.stringify(a)});if(!n.ok)throw new Error(`Calendar error ${n.status}: ${await n.text()}`)}async function Be(){try{const t=await N(),e=`${H}/_api/web/lists/getbytitle('PM_Projects')/items?$select=Id,Title&$orderby=Title asc&$top=500`,a=await fetch(e,{headers:{Authorization:`Bearer ${t}`,Accept:"application/json;odata=nometadata"}});if(a.ok){const n=await a.json();i.projects=n.value.map(o=>({id:o.Id,Title:o.Title}))}}catch{}}async function je(){var t,e;try{const a=await N(),n=`${H}/_api/web/lists/getbytitle('HD_AgentProfiles')/items?$select=Title,EmailText,Role&$orderby=Title asc`,o=await fetch(n,{headers:{Authorization:`Bearer ${a}`,Accept:"application/json;odata=nometadata"}});if(o.ok){const r=await o.json();i.agents=r.value.map(c=>({email:c.EmailText,name:c.Title}));const s=(((t=i.account)==null?void 0:t.username)??"").toLowerCase();i.myRole=((e=r.value.find(c=>(c.EmailText??"").toLowerCase()===s))==null?void 0:e.Role)??""}}catch{}}async function Pe(){try{const t=await N(),e=`${H}/_api/web/lists/getbytitle('HD_Tickets')/items?$select=Id,Title,TicketNumber,Status&$filter=Status ne 'Closed'&$orderby=Modified desc&$top=200`,a=await fetch(e,{headers:{Authorization:`Bearer ${t}`,Accept:"application/json;odata=nometadata"}});if(a.ok){const n=await a.json();i.tickets=n.value.map(o=>({id:o.Id,Title:o.Title,TicketNumber:o.TicketNumber,Status:o.Status}))}}catch{}}async function De(){try{const t=await N(),e=`${H}/_api/web/lists/getbytitle('HD_Contracts')/items?$select=CustomerEmail&$top=2000`,a=await fetch(e,{headers:{Authorization:`Bearer ${t}`,Accept:"application/json;odata=nometadata"}});if(a.ok){const n=await a.json();i.contactEmails=n.value.map(o=>(o.CustomerEmail||"").trim().toLowerCase()).filter(Boolean)}}catch{}}async function ve(){const t=document.getElementById("btn-login-main"),e=document.getElementById("btn-login");t&&(t.disabled=!0,t.textContent="กำลังเข้าสู่ระบบ…"),e&&(e.disabled=!0);try{if(pe()){if(await fe(),i.account=L.getAllAccounts()[0]??null,!i.account)throw new Error("เข้าสู่ระบบไม่สำเร็จ")}else{const a=await L.loginPopup({scopes:[Q]});i.account=a.account}await Promise.all([Be(),je(),Pe(),De()]),z()}catch{t&&(t.disabled=!1,t.textContent="เข้าสู่ระบบ"),e&&(e.disabled=!1)}}async function mt(){i.account&&await L.logoutPopup({account:i.account}),i.account=null,z()}async function q(t,e){const a=await N(),n=`${H}/_api/web/lists/getbytitle('${encodeURIComponent(t)}')/items`,o=await fetch(n,{method:"POST",headers:{Authorization:`Bearer ${a}`,Accept:"application/json;odata=nometadata","Content-Type":"application/json;odata=nometadata"},body:JSON.stringify(e)});if(!o.ok){const s=await o.text();throw new Error(`SharePoint error ${o.status}: ${s}`)}return(await o.json()).Id}let K=null;const ne="support@itservices.co.th",Oe="engineer@itservices.co.th";async function Le(){if(K)return K;try{const t=await N(),e=`${H}/_api/web/lists/getbytitle('HD_EmailTemplates')/items?$select=EventKey,Subject,Body,IsEnabled&$top=50`,a=await fetch(e,{headers:{Authorization:`Bearer ${t}`,Accept:"application/json;odata=nometadata"}});return a.ok?(K=(await a.json()).value,K):[]}catch{return[]}}async function ut(){var t,e;try{const a=await N(),n=`${H}/_api/web/lists/getbytitle('HD_Options')/items?$select=Title,Category&$filter=Category eq 'EmailConfig'&$top=1`,o=await fetch(n,{headers:{Authorization:`Bearer ${a}`,Accept:"application/json;odata=nometadata"}});return o.ok&&((e=(t=(await o.json()).value[0])==null?void 0:t.Title)==null?void 0:e.trim())||ne}catch{return ne}}function ie(t,e){return t.replace(/\{\{(\w+)\}\}/g,(a,n)=>e[n]??`{{${n}}}`)}async function pt(t,e,a,n=[]){try{const r=(await Le()).find(d=>d.EventKey===t&&d.IsEnabled);if(!r)return;const s=ie(r.Subject||"",e),c=ie(r.Body||"",e);if(!s||!c)return;const h=d=>d.trim().toLowerCase(),m=[...new Map(a.filter(Boolean).map(d=>[h(d),d])).values()];if(m.length===0)return;const u=new Set(m.map(h)),w=t==="ticket_created"?[...n,Oe]:n,P=[...new Map(w.filter(Boolean).map(d=>[h(d),d])).values()].filter(d=>!u.has(h(d))),_=await ut(),R=await V(),b={subject:s,body:{contentType:"HTML",content:c},toRecipients:m.map(d=>({emailAddress:{address:d}}))};P.length&&(b.ccRecipients=P.map(d=>({emailAddress:{address:d}}))),_&&(b.from={emailAddress:{address:_}}),await fetch("https://graph.microsoft.com/v1.0/me/sendMail",{method:"POST",headers:{Authorization:`Bearer ${R}`,"Content-Type":"application/json"},body:JSON.stringify({message:b,saveToSentItems:!0})})}catch{}}async function ft(t,e=[]){try{const a=Office.context.mailbox.item;if(!(a!=null&&a.itemId))return!1;const n=Office.context.mailbox.convertToRestId(a.itemId,Office.MailboxEnums.RestVersion.v2_0),r={Authorization:`Bearer ${await V()}`,"Content-Type":"application/json"},s=await fetch(`https://graph.microsoft.com/v1.0/me/messages/${n}/createReplyAll`,{method:"POST",headers:r});if(!s.ok)return!1;const c=await s.json(),h=b=>b.trim().toLowerCase(),m=c.ccRecipients??[],u=new Set(m.map(b=>h(b.emailAddress.address))),w=[...new Set(e.filter(Boolean).map(b=>b.trim()))].filter(b=>!u.has(h(b))).map(b=>({emailAddress:{address:b}})),P={body:{contentType:"HTML",content:t}};return w.length&&(P.ccRecipients=[...m,...w]),(await fetch(`https://graph.microsoft.com/v1.0/me/messages/${c.id}`,{method:"PATCH",headers:r,body:JSON.stringify(P)})).ok?(await fetch(`https://graph.microsoft.com/v1.0/me/messages/${c.id}/send`,{method:"POST",headers:r})).ok:!1}catch{return!1}}async function ht(t,e){const n=(await Le()).find(r=>r.EventKey===t&&r.IsEnabled);return n&&ie(n.Body||"",e)||null}async function J(t){var r;const e=s=>s.trim().toLowerCase(),a=e(((r=i.account)==null?void 0:r.username)??""),n=new Set,o=t.recipients.filter(Boolean).filter(s=>{const c=e(s);return!c||c===a||n.has(c)?!1:(n.add(c),!0)});if(o.length!==0)try{const s=await N(),c=`${H}/_api/web/lists/getbytitle('HD_Notifications')/items`;await Promise.all(o.map(h=>fetch(c,{method:"POST",headers:{Authorization:`Bearer ${s}`,Accept:"application/json;odata=nometadata","Content-Type":"application/json;odata=nometadata"},body:JSON.stringify({Title:t.title.slice(0,255),RecipientEmail:h,EventType:t.eventType,Message:t.message,LinkPath:t.linkPath,IsRead:!1})})))}catch{}}async function re(t,e){const a=document.querySelectorAll(".email-att-cb:checked");if(a.length===0)return;const n=await N();for(const o of Array.from(a)){const r=o.dataset.attId,s=o.dataset.attName,c=await new Promise((R,b)=>{Office.context.mailbox.item.getAttachmentContentAsync(r,{},d=>{d.status===Office.AsyncResultStatus.Succeeded?R(d):b(new Error(d.error.message))})}),{content:h,format:m}=c.value;let u;if(m===Office.MailboxEnums.AttachmentContentFormat.Base64){const R=atob(h);u=new Uint8Array(R.length);for(let b=0;b<R.length;b++)u[b]=R.charCodeAt(b)}else if(m===Office.MailboxEnums.AttachmentContentFormat.Eml||m===Office.MailboxEnums.AttachmentContentFormat.ICalendar)u=new TextEncoder().encode(h);else continue;const w=encodeURIComponent(s),P=`${H}/_api/web/lists/getbytitle('${encodeURIComponent(t)}')/items(${e})/AttachmentFiles/add(FileName='${w}')`;if(!(await fetch(P,{method:"POST",headers:{Authorization:`Bearer ${n}`,Accept:"application/json;odata=nometadata","Content-Type":"application/octet-stream"},body:u.buffer})).ok)throw new Error(`Upload ${s} failed`)}}async function gt(t){const e=`https://graph.microsoft.com/v1.0/me/messages/${t}/$value`;let a=await V(),n=await fetch(e,{headers:{Authorization:`Bearer ${a}`}});if((n.status===401||n.status===403)&&(a=await V(!0),n=await fetch(e,{headers:{Authorization:`Bearer ${a}`}})),!n.ok)throw new Error(`Graph ${n.status}`);return n.arrayBuffer()}async function bt(t){const e=await new Promise((n,o)=>{Office.context.mailbox.getCallbackTokenAsync({isRest:!0},r=>{r.status===Office.AsyncResultStatus.Succeeded?n(r.value):o(new Error("callback token failed"))})}),a=await fetch(`${Office.context.mailbox.restUrl}/v2.0/me/messages/${t}/$value`,{headers:{Authorization:`Bearer ${e}`}});if(!a.ok)throw new Error(`REST ${a.status}`);return a.arrayBuffer()}async function ce(t,e){const a=document.getElementById("f-attach-eml");if(!(a!=null&&a.checked))return;const n=Office.context.mailbox.item;if(!n)return;const o=Office.context.mailbox.convertToRestId(n.itemId,Office.MailboxEnums.RestVersion.v2_0);let r,s="",c="";try{r=await gt(o)}catch(P){s=P instanceof Error?P.message:String(P);try{r=await bt(o)}catch(_){c=_ instanceof Error?_.message:String(_),console.error("[eml] graph:",s,"| callback:",c),C(`ดึง .eml ไม่ได้ (Graph: ${s} / REST: ${c}) — ไฟล์อื่นบันทึกแล้ว`,"error");return}}const h=(n.subject||"email").replace(/[\\/:*?"<>|#%&{}~]/g,"_").slice(0,100).trim()||"email",m=await N(),u=`${H}/_api/web/lists/getbytitle('${encodeURIComponent(t)}')/items(${e})/AttachmentFiles/add(FileName='${encodeURIComponent(h+".eml")}')`;(await fetch(u,{method:"POST",headers:{Authorization:`Bearer ${m}`,Accept:"application/json;odata=nometadata","Content-Type":"application/octet-stream"},body:r})).ok||C("บันทึกไฟล์ .eml ไม่สำเร็จ","error")}async function le(t,e,a){const n=await N();for(const o of a){const r=await o.arrayBuffer(),s=encodeURIComponent(o.name),c=`${H}/_api/web/lists/getbytitle('${encodeURIComponent(t)}')/items(${e})/AttachmentFiles/add(FileName='${s}')`;if(!(await fetch(c,{method:"POST",headers:{Authorization:`Bearer ${n}`,Accept:"application/json;odata=nometadata","Content-Type":"application/octet-stream"},body:r})).ok)throw new Error(`Upload ${o.name} failed`)}}function C(t,e="success"){const a=document.getElementById("toast-container");if(!a)return;const n=e==="success"?"bg-green-500":e==="error"?"bg-red-500":"bg-slate-700",o=e==="success"?"✅":e==="error"?"❌":"ℹ️",r=document.createElement("div");r.className=`toast pointer-events-auto ${n} text-white text-sm font-medium px-4 py-3 rounded-lg shadow-lg max-w-xs mx-2`,r.textContent=`${o} ${t}`,a.appendChild(r),setTimeout(()=>r.remove(),4e3)}function yt(t){const e=t.split(`
+`).map(u=>u.trim()).filter(Boolean),a=/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/,n=/(\+?[\d\s()\-]{7,}(?:ext\.?\s*\d+)?)/i,o=/\b(co\.?,?\s*ltd\.?|co\.?,?\s*limited|corporation|corp\.?|บริษัท|จำกัด|holding|group|inc\.?|llc)\b/i;let r="",s="",c="";const h=[];for(const u of e)if(!/^[-_=*]{2,}$/.test(u)&&!/^(best regards|regards|sincerely|ขอแสดงความนับถือ|ด้วยความนับถือ|from|sent|thanks|thank you)/i.test(u)){if(!r){const w=u.match(a);if(w){r=w[0];continue}}if(!s){const w=u.match(n);if(w&&w[0].replace(/\D/g,"").length>=7){s=w[0].trim();continue}}if(!c&&o.test(u)){c=u;continue}u.length>=2&&u.length<=50&&!/\d{4,}/.test(u)&&h.push(u)}const m=h.find(u=>!a.test(u)&&!o.test(u))??"";return!r&&!m?null:{name:m,company:c,email:r,phone:s}}async function xt(){const t=i.signatureContact;if(!t)return;const e=(i.emailSenderEmail||"").toLowerCase();if(e&&i.contactEmails.includes(e)){C("ลูกค้านี้มีในระบบแล้ว","success"),i.signatureContact=null,z();return}const a=document.getElementById("btn-import-customer");a&&(a.disabled=!0,a.textContent="กำลังบันทึก…");try{await q("HD_Contracts",{Title:i.emailSenderName||t.name,CustomerEmail:i.emailSenderEmail,Phone:t.phone||void 0,Company:t.company||void 0,Status:"Active"}),e&&i.contactEmails.push(e),C("เพิ่มลูกค้าสำเร็จ!"),i.signatureContact=null,z()}catch(n){const o=n instanceof Error?n.message:String(n);C(`เกิดข้อผิดพลาด: ${o}`,"error"),a&&(a.disabled=!1,a.textContent="เพิ่มเป็นลูกค้า")}}function _e(){return new Date().toISOString().split("T")[0]}function vt(){const t=new Date;return`HD-${`${t.getFullYear()}${String(t.getMonth()+1).padStart(2,"0")}${String(t.getDate()).padStart(2,"0")}`}-${Math.floor(Math.random()*900+100)}`}function $e(){var t;return i.droppedFiles.length>0||document.querySelectorAll(".email-att-cb:checked").length>0||(((t=document.getElementById("f-attach-eml"))==null?void 0:t.checked)??!1)}async function Z(t,e){i.droppedFiles.length>0&&await le(t,e,i.droppedFiles),await re(t,e),await ce(t,e)}let se=!1;async function $t(){var e,a,n,o,r,s,c,h,m,u,w,P,_,R,b;if(!i.account){C("กรุณาเข้าสู่ระบบก่อน","error");return}if(se)return;se=!0;const t=document.getElementById("submit-btn");t&&(t.disabled=!0,t.textContent="กำลังบันทึก…");try{if(i.tab==="phish")await tt();else if(i.tab==="ticket"){const d=document.getElementById("f-title").value.trim(),v=document.getElementById("f-description").value.trim(),I=document.getElementById("f-priority").value,$=document.getElementById("f-customer-email").value.trim(),j=((e=document.getElementById("f-cc-enable"))==null?void 0:e.checked)??!0?(((a=document.getElementById("f-cc"))==null?void 0:a.value)||"").split(/[,;\s]+/).map(O=>O.trim()).filter(Boolean):[],B=document.getElementById("f-assigned-email").value,A=i.agents.find(O=>O.email===B),k=vt(),M=await q("HD_Tickets",{Title:d,TicketNumber:k,Description:v,Priority:I,CustomerEmail:$,CustomerName:i.emailSenderName||$,Status:"Open",AssignedEmail:B||void 0,AssignedToName:(A==null?void 0:A.name)??((n=i.account)==null?void 0:n.name)??"",ProjectID:parseInt(((o=document.getElementById("f-project"))==null?void 0:o.value)||"0")||null});if($e()){const O=await q("HD_TicketComments",{Title:"📎 ไฟล์แนบจากอีเมล",TicketID:M,CommentText:"ไฟล์แนบจาก Outlook Add-in",CommentType:"Internal",CommentDate:new Date().toISOString(),ParentID:0});await Z("HD_TicketComments",O)}i.droppedFiles=[];const D={ticket_number:k,ticket_title:d,priority:I,category:"-",description:(v||"-").replace(/\n/g,"<br>"),customer_name:i.emailSenderName||$,assigned_name:(A==null?void 0:A.name)??((r=i.account)==null?void 0:r.name)??"-",link:"https://itservices.co.th/helpdesk/"},p=[B,i.account.username,...j,Oe].filter(Boolean);let y=!1;const S=await ht("ticket_created",D);if(S){const O=`<div style="border-left:4px solid #2563eb;background:#eff6ff;padding:10px 14px;margin:0 0 14px;font-family:Segoe UI,sans-serif">
+             <div style="font-size:15px;font-weight:700;color:#1e40af">Ticket No. ${k}</div>
+             <div style="font-size:12px;color:#475569;margin-top:2px">กรุณาตอบกลับในอีเมลฉบับนี้เพื่อให้ข้อมูลอยู่ใน Ticket เดียวกัน</div>
+           </div>`;y=await ft(O+S,p)}y||await pt("ticket_created",D,[$],p),C(y?"สร้าง Ticket และตอบกลับในเธรดเดิมแล้ว!":"สร้าง Ticket สำเร็จ!")}else if(i.tab==="task"){const d=document.getElementById("f-title").value.trim(),v=parseInt(((s=document.getElementById("f-project"))==null?void 0:s.value)||"0"),I=document.getElementById("f-due-date").value,$=document.getElementById("f-note").value.trim(),x=document.getElementById("f-assigned-email").value,j=i.agents.find(k=>k.email===x);if(!v){C("กรุณาเลือก Project","error");return}const B=await q("PM_Tasks",{Title:d,DueDate:I||null,TaskNote:$,AssignedTo:(j==null?void 0:j.name)??i.account.name??i.account.username,AssignedEmail:x,IsCompleted:!1,IsAcknowledged:!1,ProjectID:v});if(i.droppedFiles.length>0&&await le("PM_Tasks",B,i.droppedFiles),await re("PM_Tasks",B),await ce("PM_Tasks",B),i.droppedFiles=[],await J({recipients:[x],title:`📋 ได้รับมอบหมาย Task: ${d}`,message:$||(I?`กำหนดส่ง ${I}`:"มี Task ใหม่"),linkPath:v?`/projects/${v}`:"/my-work",eventType:"task_assigned"}),((c=document.getElementById("f-teams"))==null?void 0:c.checked)&&I){const k=Array.from(document.querySelectorAll(".att-internal:checked")).map(y=>y.value),M=(((h=document.getElementById("f-ext-att"))==null?void 0:h.value)||"").split(/[,;\s]+/).map(y=>y.trim()).filter(Boolean),D=`${I}T09:00:00`,p=`${I}T10:00:00`;try{await dt({subject:d,start:D,end:p,body:$,attendees:[...k,...M],isOnlineMeeting:!0}),C("สร้าง Task + นัดประชุม Teams สำเร็จ!")}catch(y){C("สร้าง Task แล้ว แต่สร้างนัดประชุมไม่สำเร็จ: "+(y instanceof Error?y.message:""),"error")}}else C("สร้าง Task สำเร็จ!")}else if(i.tab==="incident"){const d=document.getElementById("f-title").value.trim(),v=parseInt(((m=document.getElementById("f-project"))==null?void 0:m.value)||"0"),I=document.getElementById("f-description").value.trim(),$=document.getElementById("f-severity").value,x=document.getElementById("f-assigned-email").value,j=i.agents.find(p=>p.email===x),B=document.getElementById("f-status").value,A=document.getElementById("f-incident-date").value,k=document.getElementById("f-resolution").value.trim();if(!v){C("กรุณาเลือก Project","error");return}const M=parseInt(((u=document.getElementById("f-sla"))==null?void 0:u.value)||"0")||null,D=await q("PM_Incidents",{Title:d,Description:I||void 0,Severity:$,Status:B,AssignedTo:(j==null?void 0:j.name)??i.account.name??i.account.username,AssignedEmail:x,ProjectID:v,IncidentDate:A||_e(),Resolution:k||void 0,SLAHours:M,SLADue:Ie(M),...B==="Resolved"?{ResolvedDate:new Date().toISOString()}:{}});i.droppedFiles.length>0&&await le("PM_Incidents",D,i.droppedFiles),await re("PM_Incidents",D),await ce("PM_Incidents",D),i.droppedFiles=[],await J({recipients:[x],title:`🚨 ได้รับมอบหมาย Incident: ${d}`,message:`ความรุนแรง ${$}${I?" — "+I.slice(0,120):""}`,linkPath:v?`/projects/${v}`:"/my-work",eventType:"incident_created"}),C("สร้าง Incident สำเร็จ!")}else if(i.tab==="comment"){const d=parseInt(((w=document.getElementById("f-ticket"))==null?void 0:w.value)||"0"),v=document.getElementById("f-comment").value.trim(),I=document.getElementById("f-comment-type").value;if(!d){C("กรุณาเลือก Ticket","error");return}if(!v){C("กรุณาพิมพ์ Comment","error");return}const $=await q("HD_TicketComments",{Title:v.slice(0,100),TicketID:d,CommentText:v,CommentType:I,CommentDate:new Date().toISOString()});await Z("HD_TicketComments",$),i.droppedFiles=[];try{const x=await N(),j=`${H}/_api/web/lists/getbytitle('HD_Tickets')/items(${d})?$select=TicketNumber,Title,AssignedEmail,Author/EMail&$expand=Author`,B=await fetch(j,{headers:{Authorization:`Bearer ${x}`,Accept:"application/json;odata=nometadata"}});if(B.ok){const A=await B.json(),k=i.account.username.toLowerCase(),M=[...new Set([A.AssignedEmail,(P=A.Author)==null?void 0:P.EMail].filter(Boolean))].filter(D=>D.toLowerCase()!==k);M.length&&await J({recipients:M,title:`💬 ${((_=i.account)==null?void 0:_.name)??"มีคน"} คอมเมนต์ใน ${A.TicketNumber||"#"+d}`,message:v.slice(0,200),linkPath:`/tickets/${d}`,eventType:"comment_added"})}}catch{}C("เพิ่ม Comment สำเร็จ!")}else if(i.tab==="project"){const d=document.getElementById("f-title").value.trim(),v=document.getElementById("f-company").value.trim(),I=document.getElementById("f-group").value,$=document.getElementById("f-status").value,x=document.getElementById("f-start").value,j=document.getElementById("f-end").value,B=document.getElementById("f-description").value.trim();if(!d){C("กรุณาใส่ชื่อโครงการ","error");return}const A=await q("PM_Projects",{Title:d,Company:v||void 0,ProjectGroup:I,Progress:0,StartDate:x||void 0,EndDate:j||null,Status:$,CreatedByEmail:i.account.username,Comment:B||void 0});if($e()){const k=await q("PM_Comments",{Title:"📎 ไฟล์แนบจากอีเมล",ProjectID:A,CommentText:"ไฟล์แนบจาก Outlook Add-in",CommentType:"Internal",CommentDate:new Date().toISOString(),ParentID:0});await Z("PM_Comments",k)}i.droppedFiles=[],C("สร้างโครงการสำเร็จ!")}else if(i.tab==="projcomment"){const d=parseInt(((R=document.getElementById("f-project"))==null?void 0:R.value)||"0"),v=document.getElementById("f-comment").value.trim(),I=document.getElementById("f-comment-type").value;if(!d){C("กรุณาเลือกโครงการ","error");return}if(!v){C("กรุณาพิมพ์ Comment","error");return}const $=await q("PM_Comments",{Title:v.slice(0,100),ProjectID:d,CommentText:v,CommentType:I,CommentDate:new Date().toISOString(),ParentID:0});await Z("PM_Comments",$),i.droppedFiles=[];try{const x=await N(),j=`${H}/_api/web/lists/getbytitle('PM_Projects')/items(${d})?$select=Title,CreatedByEmail`,B=await fetch(j,{headers:{Authorization:`Bearer ${x}`,Accept:"application/json;odata=nometadata"}});if(B.ok){const A=await B.json(),k=i.account.username.toLowerCase();A.CreatedByEmail&&A.CreatedByEmail.toLowerCase()!==k&&await J({recipients:[A.CreatedByEmail],title:`💬 ${((b=i.account)==null?void 0:b.name)??"มีคน"} คอมเมนต์ในโครงการ ${A.Title??""}`,message:v.slice(0,200),linkPath:`/projects/${d}?tab=comments`,eventType:"comment_added"})}}catch{}C("เพิ่ม Comment สำเร็จ!")}}catch(d){const v=d instanceof Error?d.message:String(d);C(`เกิดข้อผิดพลาด: ${v}`,"error")}finally{se=!1,t&&(t.disabled=!1,t.textContent="บันทึก")}}const wt={ticket:{label:"Ticket",icon:"🎫"},comment:{label:"Comment",icon:"💬"},project:{label:"Project",icon:"📁"},task:{label:"Task",icon:"✅"},incident:{label:"Incident",icon:"🚨"},projcomment:{label:"Comment",icon:"💬"},phish:{label:"PhishGuard",icon:"🛡️"}},Tt=[{title:"🎫 Helpdesk",tabs:["ticket","comment"]},{title:"📁 Project",tabs:["project","task","incident","projcomment"]},{title:"🛡️ Security",tabs:["phish"]}],Re=["f-title","f-description","f-priority","f-customer-email","f-cc","f-assigned-email","f-project","f-due-date","f-note","f-severity","f-status","f-sla","f-incident-date","f-resolution","f-ticket","f-comment","f-comment-type","f-company","f-group","f-start","f-end","f-ext-att","f-attach-eml"];let U={};function kt(){for(const e of Re){const a=document.getElementById(e);a&&(U[e]=a.value)}const t=document.getElementById("f-teams");t&&(U["f-teams"]=t.checked)}function Et(){for(const e of Re){const a=document.getElementById(e);a&&U[e]!==void 0&&U[e]!==""&&(a.value=U[e])}const t=document.getElementById("f-teams");if(t&&U["f-teams"]!==void 0){t.checked=U["f-teams"];const e=document.getElementById("teams-fields");e&&(e.style.display=t.checked?"block":"none")}}function z(){var j,B,A,k,M,D;const t=document.getElementById("app");if(!t)return;kt();const{account:e,tab:a,emailSubject:n,emailSenderName:o,emailSenderEmail:r,emailBodyPreview:s}=i,c=i.emailBodyReply||s,h=e!==null,m=`
+    <div class="bg-gradient-to-r from-blue-700 to-blue-600 text-white px-4 py-2.5 flex items-center gap-2.5 shadow flex-shrink-0">
+      <div class="w-7 h-7 bg-white/95 rounded-lg flex items-center justify-center flex-shrink-0">
+        <span class="text-blue-700 font-extrabold text-xs">iT</span>
+      </div>
+      <div class="min-w-0 flex-1">
+        <div class="font-semibold text-sm leading-tight truncate">iT Services Helpdesk</div>
+        ${h?`<div class="text-[10px] text-blue-100 truncate">${g((e==null?void 0:e.name)??(e==null?void 0:e.username)??"")}</div>`:""}
+      </div>
+      ${h?`<button id="btn-logout" title="ออกจากระบบ" class="p-1.5 rounded-lg hover:bg-white/15 transition flex-shrink-0">
+             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+           </button>`:`<button id="btn-login" class="text-xs bg-white text-blue-700 font-semibold hover:bg-blue-50 px-3 py-1 rounded-lg transition flex-shrink-0">
+             เข้าสู่ระบบ
+           </button>`}
+    </div>
+  `;if(!h){t.innerHTML=`
+      ${m}
+      <div class="flex flex-col items-center justify-center px-6 py-16 gap-4 text-center">
+        <div class="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center text-3xl">🔐</div>
+        <h2 class="text-base font-semibold text-slate-700">เข้าสู่ระบบด้วย Microsoft</h2>
+        <p class="text-xs text-slate-500">เพื่อสร้าง Ticket / Task / Incident จาก Email นี้</p>
+        <button id="btn-login-main"
+          class="mt-2 w-full bg-blue-700 hover:bg-blue-600 text-white text-sm font-semibold py-2.5 rounded-lg shadow transition">
+          เข้าสู่ระบบ
+        </button>
+      </div>
+    `,(j=document.getElementById("btn-login"))==null||j.addEventListener("click",ve),(B=document.getElementById("btn-login-main"))==null||B.addEventListener("click",ve);return}const u=n?`<div class="mx-3 mt-3 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 text-xs text-slate-700 space-y-1">
+         <div class="font-semibold text-blue-800 truncate" title="${g(n)}">📧 ${g(n)}</div>
+         ${o?`<div class="text-slate-500">จาก: <span class="font-medium text-slate-700">${g(o)}</span></div>`:""}
+         ${r&&r!==o?`<div class="text-slate-400 truncate">${g(r)}</div>`:""}
+       </div>`:`<div class="mx-3 mt-3 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
+         ⚠️ ไม่พบข้อมูล Email (โหมดทดสอบ)
+       </div>`,w=i.signatureContact,P=!!r&&i.contactEmails.includes(r.toLowerCase()),_=w?`<div class="mx-3 mt-3 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2.5 text-xs text-slate-700">
+         <div class="flex items-center justify-between mb-2">
+           <span class="font-semibold text-orange-700">👤 ข้อมูลผู้ส่ง (จาก Signature)</span>
+         </div>
+         <div class="space-y-0.5 mb-2.5">
+           ${o?`<div><span class="text-slate-400">ชื่อ:</span> <span class="font-medium">${g(o)}</span></div>`:""}
+           ${w.company?`<div><span class="text-slate-400">บริษัท:</span> ${g(w.company)}</div>`:""}
+           ${r?`<div><span class="text-slate-400">Email:</span> ${g(r)}</div>`:""}
+           ${w.phone?`<div><span class="text-slate-400">โทร:</span> ${g(w.phone)}</div>`:""}
+         </div>
+         ${P?'<div class="w-full bg-green-100 text-green-700 text-xs font-semibold py-1.5 rounded-md text-center">✓ ลูกค้านี้มีในระบบแล้ว</div>':`<button id="btn-import-customer"
+                class="w-full bg-orange-500 hover:bg-orange-400 text-white text-xs font-semibold py-1.5 rounded-md transition">
+                + เพิ่มเป็นลูกค้า
+              </button>`}
+       </div>`:"",R=`
+    <div class="mx-3 mt-3 space-y-2">
+      ${Tt.map(p=>`
+        <div>
+          <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1 px-0.5">${p.title}</div>
+          <div class="grid grid-cols-4 gap-1">
+            ${p.tabs.map(y=>{const S=wt[y];return`<button data-tab="${y}"
+                class="tab-btn flex flex-col items-center gap-1 py-2 rounded-lg transition ${a===y?"bg-blue-700 text-white shadow":"text-slate-500 hover:bg-slate-100"}">
+                <span class="text-base leading-none">${S.icon}</span>
+                <span class="text-[9px] font-medium leading-none">${S.label}</span>
+              </button>`}).join("")}
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;let b="";a==="phish"?b=ot(!!e):a==="ticket"?b=`
+      ${E("Title / หัวข้อ",`<input id="f-title" type="text"
+        class="${T}"
+        value="${g(n)}" />`)}
+      ${E("รายละเอียด",`<textarea id="f-description" rows="4"
+        class="${T} resize-none">${g(s)}</textarea>`)}
+      ${E("Priority",`<select id="f-priority" class="${T}">
+        <option value="Low">Low</option>
+        <option value="Medium" selected>Medium</option>
+        <option value="High">High</option>
+        <option value="Critical">Critical</option>
+      </select>`)}
+      ${E("Customer Email",`<input id="f-customer-email" type="email"
+        class="${T}"
+        value="${g(r)}" />`)}
+      ${E("CC — ให้ผู้ที่อยู่ในเมลนี้รับรู้",`
+        <label class="flex items-center gap-2 text-xs text-slate-600 mb-1.5 cursor-pointer">
+          <input id="f-cc-enable" type="checkbox" ${i.emailCc.length?"checked":""} /> แนบผู้รับในเมลนี้เป็น CC อัตโนมัติ
+        </label>
+        <input id="f-cc" type="text" class="${T}" value="${g(i.emailCc.join(", "))}" placeholder="someone@company.com, boss@company.com" />`)}
+      ${E("Assign ให้ Agent",oe(e.username))}
+      ${E("โครงการ (ไม่บังคับ)",Y(!0))}
+      ${G()}
+    `:a==="task"?b=`
+      ${E("ชื่อ Task *",`<input id="f-title" type="text" required
+        class="${T}" value="${g(n)}" />`)}
+      ${E("Project *",Y())}
+      ${E("Assign ให้",oe(e.username))}
+      ${E("Due Date",`<input id="f-due-date" type="date" class="${T}" />`)}
+      ${E("Task Note",`<textarea id="f-note" rows="4"
+        class="${T} resize-y">${g(s)}</textarea>`)}
+      <label class="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer mb-1">
+        <input id="f-teams" type="checkbox" class="rounded" onchange="document.getElementById('teams-fields').style.display=this.checked?'block':'none'" />
+        💻 เพิ่มการประชุมออนไลน์ (Teams) — ใช้เวลา 09:00–10:00 ของวัน Due Date
+      </label>
+      <div id="teams-fields" style="display:none" class="space-y-2 mb-2">
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">ผู้เข้าร่วม Internal</label>
+          <div class="max-h-28 overflow-y-auto border border-slate-200 rounded-md p-1.5 space-y-0.5">
+            ${i.agents.map(p=>`<label class="flex items-center gap-2 text-xs text-slate-700 px-1 py-0.5 hover:bg-slate-50 rounded cursor-pointer">
+              <input type="checkbox" class="att-internal" value="${g(p.email)}" /> ${g(p.name)}
+            </label>`).join("")}
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Email ภายนอก (คั่นด้วย ,)</label>
+          <input id="f-ext-att" type="text" class="${T}" placeholder="someone@company.com, ..." />
+        </div>
+      </div>
+      ${G()}
+    `:a==="incident"?b=`
+      ${E("ชื่อ Incident *",`<input id="f-title" type="text" required
+        class="${T}" value="${g(n)}" />`)}
+      ${E("Project *",Y())}
+      <div class="grid grid-cols-2 gap-2">
+        <div><label class="block text-xs font-medium text-slate-600 mb-1">ความรุนแรง</label>
+          <select id="f-severity" class="${T}">
+            <option value="Low">Low</option>
+            <option value="Medium" selected>Medium</option>
+            <option value="High">High</option>
+            <option value="Critical">Critical</option>
+          </select>
+        </div>
+        <div><label class="block text-xs font-medium text-slate-600 mb-1">สถานะ</label>
+          <select id="f-status" class="${T}">
+            <option value="Open" selected>Open</option>
+            <option value="In Progress">In Progress</option>
+            <option value="Resolved">Resolved</option>
+          </select>
+        </div>
+      </div>
+      ${E("SLA — ต้องแก้ให้จบภายใน",`
+        <select id="f-sla" class="${T}">
+          <option value="">ไม่กำหนด SLA</option>
+          ${Ge.map(p=>`<option value="${p.hours}" ${p.hours===te.Medium?"selected":""}>${p.labelTh}</option>`).join("")}
+        </select>
+        <p id="f-sla-hint" class="text-[11px] text-slate-400 mt-1">นับจากตอนนี้ · ครบกำหนด ${be(te.Medium)}</p>`)}
+      ${E("Assign ให้ Agent",oe(e.username))}
+      ${E("วันที่เกิด Incident",`<input id="f-incident-date" type="date" class="${T}" value="${_e()}" />`)}
+      ${E("รายละเอียด",`<textarea id="f-description" rows="4"
+        class="${T} resize-y">${g(s)}</textarea>`)}
+      ${E("วิธีแก้ไข (ถ้ามี)",`<textarea id="f-resolution" rows="2"
+        class="${T} resize-y" placeholder="อธิบายวิธีแก้ไขปัญหา..."></textarea>`)}
+      ${G()}
+    `:a==="comment"?b=`
+      ${E("เลือก Ticket *",`<select id="f-ticket" class="${T}">
+        <option value="">-- เลือก Ticket ที่จะเพิ่ม Comment --</option>
+        ${i.tickets.map(p=>`<option value="${p.id}">${g(p.TicketNumber||"#"+p.id)} · ${g(p.Title)}</option>`).join("")}
+      </select>`)}
+      ${E("ประเภท",`<select id="f-comment-type" class="${T}">
+        <option value="Internal">Internal</option>
+        <option value="External">External</option>
+      </select>`)}
+      ${E("Comment *",`<textarea id="f-comment" rows="5"
+        class="${T} resize-y" placeholder="พิมพ์ comment...">${g(c)}</textarea>`)}
+      ${G()}
+    `:a==="project"?b=`
+      ${E("ชื่อโครงการ *",`<input id="f-title" type="text" required
+        class="${T}" value="${g(n)}" />`)}
+      ${E("บริษัท / ลูกค้า",`<input id="f-company" type="text" class="${T}" value="${g(((A=i.signatureContact)==null?void 0:A.company)??"")}" />`)}
+      <div class="grid grid-cols-2 gap-2">
+        <div><label class="block text-xs font-medium text-slate-600 mb-1">กลุ่มโครงการ</label>
+          <select id="f-group" class="${T}">
+            ${["Internal","External","R&D","Maintenance","อื่นๆ"].map(p=>`<option>${p}</option>`).join("")}
+          </select>
+        </div>
+        <div><label class="block text-xs font-medium text-slate-600 mb-1">สถานะ</label>
+          <select id="f-status" class="${T}">
+            ${["Planning","Active","On Hold","Completed","Cancelled"].map(p=>`<option>${p}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <div><label class="block text-xs font-medium text-slate-600 mb-1">วันที่เริ่ม</label>
+          <input id="f-start" type="date" class="${T}" /></div>
+        <div><label class="block text-xs font-medium text-slate-600 mb-1">วันสิ้นสุด</label>
+          <input id="f-end" type="date" class="${T}" /></div>
+      </div>
+      ${E("รายละเอียด",`<textarea id="f-description" rows="4"
+        class="${T} resize-y">${g(s)}</textarea>`)}
+      ${G()}
+    `:a==="projcomment"&&(b=`
+      ${E("เลือกโครงการ *",Y())}
+      ${E("ประเภท",`<select id="f-comment-type" class="${T}">
+        <option value="Internal">Internal</option>
+        <option value="External">External</option>
+      </select>`)}
+      ${E("Comment *",`<textarea id="f-comment" rows="5"
+        class="${T} resize-y" placeholder="พิมพ์ comment...">${g(c)}</textarea>`)}
+      ${G()}
+    `);const d=a==="phish"?at():a==="comment"||a==="projcomment"?"เพิ่ม Comment":a==="project"?"สร้างโครงการ":a==="incident"?"แจ้ง Incident":a==="task"?"สร้าง Task":"สร้าง Ticket";t.innerHTML=`
+    <div class="flex flex-col h-screen bg-slate-50">
+      ${m}
+      <div class="flex-1 overflow-y-auto">
+        ${u}
+        ${_}
+        ${R}
+        <div class="mx-3 mt-3 space-y-3 pb-3">
+          ${b}
+        </div>
+      </div>
+      <div class="border-t border-slate-200 bg-white px-3 py-2.5 flex-shrink-0">
+        <button id="submit-btn"
+          class="w-full bg-blue-700 hover:bg-blue-600 active:bg-blue-800 text-white text-sm font-semibold py-2.5 rounded-lg shadow transition">
+          ${d}
+        </button>
+      </div>
+    </div>
+  `,(k=document.getElementById("btn-logout"))==null||k.addEventListener("click",mt),(M=document.getElementById("submit-btn"))==null||M.addEventListener("click",$t),(D=document.getElementById("btn-import-customer"))==null||D.addEventListener("click",xt),a==="phish"&&it();const v=document.getElementById("f-severity"),I=document.getElementById("f-sla");if(v&&I){let p=!1;const y=document.getElementById("f-sla-hint"),S=()=>{if(!y)return;const O=parseInt(I.value||"0")||null;y.textContent=O?`นับจากตอนนี้ · ครบกำหนด ${be(O)}`:"ไม่กำหนด SLA — เคสนี้จะวัดไม่ได้ในรายงาน"};I.addEventListener("change",()=>{p=!0,S()}),v.addEventListener("change",()=>{if(p)return;const O=te[v.value];O&&(I.value=String(O),S())})}document.querySelectorAll(".tab-btn").forEach(p=>{p.addEventListener("click",()=>{const y=p.dataset.tab;y&&y!==i.tab&&(i.tab=y,z(),y==="phish"&&X())})});const $=document.getElementById("drop-zone"),x=document.getElementById("f-files");$&&x&&(x.addEventListener("change",()=>{x.files&&de(Array.from(x.files)),x.value=""}),$.addEventListener("dragover",p=>{p.preventDefault(),$.classList.add("border-blue-500","bg-blue-50")}),$.addEventListener("dragleave",()=>{$.classList.remove("border-blue-500","bg-blue-50")}),$.addEventListener("drop",p=>{var S;p.preventDefault(),$.classList.remove("border-blue-500","bg-blue-50");const y=Array.from(((S=p.dataTransfer)==null?void 0:S.files)??[]);y.length&&de(y)})),document.querySelectorAll(".remove-dropped").forEach(p=>{p.addEventListener("click",()=>{const y=parseInt(p.dataset.remove??"-1");y>=0&&(i.droppedFiles.splice(y,1),z())})}),Et()}function de(t){i.droppedFiles.push(...t),z()}document.addEventListener("paste",t=>{var n;if(!i.account)return;const e=Array.from(((n=t.clipboardData)==null?void 0:n.items)??[]),a=[];for(const o of e)if(o.kind==="file"){const r=o.getAsFile();if(r){const s=r.name&&r.name!=="image.png"?r.name:`screenshot-${new Date().toISOString().replace(/[:.]/g,"-").slice(0,19)}.png`;a.push(new File([r],s,{type:r.type}))}}a.length&&(t.preventDefault(),de(a),C(`แนบไฟล์แล้ว: ${a.map(o=>o.name).join(", ")}`))});const T="w-full border border-slate-300 rounded-md px-2.5 py-1.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white";function we(t){return t<1024?`${t} B`:t<1024*1024?`${(t/1024).toFixed(0)} KB`:`${(t/1024/1024).toFixed(1)} MB`}function G(){const t=i.emailAttachments,e=i.droppedFiles,a=t.length>0?`<div class="mb-2 space-y-1">
+        <p class="text-xs text-slate-500">📎 ไฟล์แนบจาก Email:</p>
+        ${t.map(o=>`
+          <label class="flex items-center gap-2 text-xs text-slate-700 cursor-pointer hover:bg-slate-50 rounded px-1 py-0.5">
+            <input type="checkbox" class="email-att-cb" data-att-id="${g(o.id)}" data-att-name="${g(o.name)}" data-att-item="${o.isItem?"1":"0"}" checked />
+            <span class="flex-1 truncate">${o.isItem?"📧 ":""}${g(o.name)}</span>
+            <span class="text-slate-400 flex-shrink-0">${we(o.size)}</span>
+          </label>`).join("")}
+      </div>`:"",n=e.length>0?`<div class="mt-2 space-y-1">
+        ${e.map((o,r)=>`<div class="flex items-center gap-2 text-xs text-slate-700 bg-slate-50 rounded px-2 py-1">
+            <span class="text-base">${o.type.startsWith("image/")?"🖼️":"📄"}</span>
+            <span class="flex-1 truncate">${g(o.name)}</span>
+            <span class="text-slate-400">${we(o.size)}</span>
+            <button type="button" data-remove="${r}"
+              class="remove-dropped text-red-400 hover:text-red-600 font-bold leading-none">✕</button>
+          </div>`).join("")}
+      </div>`:"";return`<div class="space-y-1">
+    <label class="block text-xs font-medium text-slate-600">ไฟล์แนบ</label>
+    <label class="flex items-center gap-2 text-xs text-slate-700 cursor-pointer hover:bg-slate-50 rounded px-1 py-0.5">
+      <input type="checkbox" id="f-attach-eml" />
+      <span class="flex-1">📧 แนบอีเมลต้นฉบับ (.eml)</span>
+    </label>
+    ${a}
+    <div id="drop-zone"
+      class="relative border-2 border-dashed border-slate-300 rounded-lg p-4 text-center text-xs text-slate-400
+             hover:border-blue-400 hover:bg-blue-50 transition cursor-pointer select-none">
+      <div class="pointer-events-none">
+        <div class="text-2xl mb-1">📂</div>
+        <div>ลากไฟล์มาวาง หรือ <span class="text-blue-600 font-medium">คลิกเลือก</span></div>
+        <div class="mt-0.5 text-slate-300">หรือกด <kbd class="bg-slate-100 text-slate-500 px-1 rounded">Ctrl+V</kbd> วางจาก clipboard ได้เลย</div>
+      </div>
+      <input id="f-files" type="file" multiple
+        class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+    </div>
+    ${n}
+  </div>`}function oe(t){var e;return`<select id="f-assigned-email" class="${T}">
+    <option value="${g(t)}">${g(((e=i.account)==null?void 0:e.name)??t)} (ฉัน)</option>
+    ${i.agents.filter(a=>a.email!==t).map(a=>`<option value="${g(a.email)}">${g(a.name)}</option>`).join("")}
+  </select>`}function Y(t=!1){return i.projects.length===0?t?'<div class="text-xs text-slate-400">ไม่พบ Project ที่ Active</div>':'<div class="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-2">⚠️ ไม่พบ Project ที่ Active</div>':`<select id="f-project" class="${T}">
+    <option value="">${t?"-- ไม่ผูกกับโครงการ --":"-- เลือก Project --"}</option>
+    ${i.projects.map(e=>`<option value="${e.id}">${g(e.Title)}</option>`).join("")}
+  </select>`}function E(t,e){return`
+    <div class="space-y-1">
+      <label class="block text-xs font-medium text-slate-600">${t}</label>
+      ${e}
+    </div>
+  `}function g(t){return t.replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}async function It(){Ve({sharepointUrl:H,internalDomains:["itservices.co.th","rpaexpert.com","rpaexpert.onmicrosoft.com"],getToken:N,getGraphToken:()=>V(),account:()=>i.account?{name:i.account.name,username:i.account.username}:null,toast:(e,a)=>C(e,a??"success"),rerender:z,canWhitelist:()=>["Agent","Supervisor","Boss","Admin"].includes(i.myRole)}),await L.initialize(),await L.handleRedirectPromise();const t=L.getAllAccounts();if(t.length>0){i.account=t[0];try{await L.acquireTokenSilent({scopes:[Q],account:t[0]}),await Promise.all([Be(),je(),Pe(),De()])}catch{i.account=null}}typeof Office<"u"?Office.onReady(e=>{var a;if(e.host===Office.HostType.Outlook){const n=Office.context.mailbox.item;if(n){i.emailSubject=n.subject??"";const o=n.from;o&&(i.emailSenderName=o.displayName??"",i.emailSenderEmail=o.emailAddress??"");const r=(((a=i.account)==null?void 0:a.username)??"").toLowerCase(),s=((o==null?void 0:o.emailAddress)??"").toLowerCase(),c=[...n.to??[],...n.cc??[]].map(m=>m.emailAddress).filter(Boolean);i.emailCc=[...new Set(c.map(m=>m.toLowerCase()))].filter(m=>m!==r&&m!==s);const h=n.attachments??[];i.emailAttachments=h.filter(m=>!m.isInline&&(m.attachmentType===Office.MailboxEnums.AttachmentType.File||m.attachmentType===Office.MailboxEnums.AttachmentType.Item)).map(m=>({id:m.id,name:m.attachmentType===Office.MailboxEnums.AttachmentType.Item?`${(m.name||"email").replace(/\.eml$/i,"")}.eml`:m.name,size:m.size,isItem:m.attachmentType===Office.MailboxEnums.AttachmentType.Item})),n.body.getAsync(Office.CoercionType.Html,{asyncContext:{}},m=>{if(m.status===Office.AsyncResultStatus.Succeeded){let u=function(k,M=!1){if(k.nodeType===3){const S=k.textContent??"";return M&&S.trim()===""?"":S}const D=k,p=(D.tagName??"").toLowerCase();if(_.includes(p))return"";if(p==="br")return" ";if(p==="tr"){const S=[];for(let O=0;O<D.childNodes.length;O++){const he=D.childNodes[O],ge=(he.tagName??"").toLowerCase();(ge==="td"||ge==="th")&&S.push((he.textContent??"").replace(/\s+/g," ").trim())}return S.length?S.join("	")+`
+`:""}if(b.includes(p)){let S="";for(let O=0;O<D.childNodes.length;O++)S+=u(D.childNodes[O],!0);return S}let y="";for(let S=0;S<D.childNodes.length;S++)y+=u(D.childNodes[S],!1);return R.includes(p)&&(y=`
+`+y.trim()+`
+`),y};const w=m.value,P=new DOMParser().parseFromString(w,"text/html"),_=["style","script","head","img","meta","link","noscript"],R=["p","div","li","h1","h2","h3","h4","h5","h6","blockquote"],b=["table","thead","tbody","tfoot"],I=u(P.body??P.documentElement).replace(/[ \t]{2,}/g," ").replace(/\n[ \t]+/g,`
+`).replace(/\n{3,}/g,`
+
+`).trim().split(`
+`),$=[];let x="";for(const k of I)k.trim()===""?x&&($.push(x.trim()),x=""):k.includes("	")?(x&&($.push(x.trim()),x=""),$.push(k)):x=x?x+" "+k.trim():k.trim();x&&$.push(x.trim());const j=$.join(`
+`),B=/\n([-_]{3,}|From:\s|Best regards|Regards,|ขอแสดงความนับถือ|Sent:\s)/i,A=j.search(B);i.signatureContact=A>80?yt(j.slice(A).trim()):null,i.emailBodyPreview=j.trim().slice(0,2e4),i.emailBodyReply=Ue(i.emailBodyPreview)}z()});return}}Te(),z()}):(Te(),z())}function Te(){i.emailSubject="[DEV] Test Email Subject",i.emailSenderName="Test Sender",i.emailSenderEmail="test@example.com",i.emailBodyPreview="This is a placeholder email body for development mode.",i.emailBodyReply=i.emailBodyPreview}It().catch(t=>{console.error("Init error:",t);const e=document.getElementById("app");e&&(e.innerHTML=`<div class="p-4 text-red-600 text-sm">เกิดข้อผิดพลาด: ${String(t)}</div>`)});
