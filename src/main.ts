@@ -1,4 +1,5 @@
 import { stripQuoted } from './emailQuote'
+import { incidentMailPlan } from './incidentMail'
 import { SLA_OPTIONS, SLA_BY_SEVERITY, computeSlaDue, slaDueLabel } from './sla'
 import { initPhish, analysePhish, phishPanelHTML, bindPhishPanel, submitPhishReport, phishSubmitLabel } from './phishPanel'
 import {
@@ -877,6 +878,24 @@ async function handleSubmit(): Promise<void> {
         linkPath: projectId ? `/projects/${projectId}` : '/my-work',
         eventType: 'incident_created',
       })
+      // แจ้งทางอีเมลด้วย — Incident เป็นเรื่องเร่งด่วน รอให้คนบังเอิญเปิดแอปไม่ทัน
+      {
+        const proj = state.projects.find(p => p.id === projectId)
+        const plan = incidentMailPlan({
+          title, severity, status,
+          description,
+          incidentDate: incidentDate || todayISO(),
+          slaHours,
+          projectName: proj?.Title,
+          projectId,
+          assignedName: assignedAgent?.name,
+          assignedEmail,
+          requesterEmail: state.account.username,
+          actorEmail: state.account.username,
+          baseUrl: 'https://itservices.co.th/helpdesk/',
+        })
+        if (plan.to.length > 0) await sendTemplateEmail('incident_created', plan.vars, plan.to, plan.cc)
+      }
       showToast('สร้าง Incident สำเร็จ!')
 
     } else if (state.tab === 'comment') {
