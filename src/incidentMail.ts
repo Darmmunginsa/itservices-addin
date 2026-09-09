@@ -68,7 +68,10 @@ export function incidentRecipients(i: IncidentMailInput): { to: string[]; cc: st
 }
 
 const SLA_TEXT = (h?: number | null): string => {
-  if (!h || h <= 0) return ''
+  // ต้องตรงกับ webapp: ไม่ได้ตั้ง SLA ต้องมีคำอ่านได้ ไม่ใช่ค่าว่าง
+  // template แทนค่าตรง ๆ ไม่มี if — ช่องที่หายไปกลางตารางในเมลถึงลูกค้า
+  // ดูเหมือนระบบพัง มากกว่าดูเหมือนไม่ได้ตั้ง
+  if (!h || h <= 0) return 'ไม่ได้กำหนด'
   if (h < 24) return `${h} ชั่วโมง`
   const d = h / 24
   return Number.isInteger(d) ? `${d} วัน` : `${h} ชั่วโมง`

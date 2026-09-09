@@ -17,10 +17,23 @@ export const SLA_BY_SEVERITY: Record<string, number> = {
   Critical: 1, High: 4, Medium: 24, Low: 72,
 }
 
-/** เส้นตายของเคสที่เพิ่งเปิด — นับจากตอนนี้ */
-export function computeSlaDue(hours: number | null | undefined, now = new Date()): string | null {
+/**
+ * เส้นตายของเคส — ลำดับพารามิเตอร์ต้องตรงกับ webproject (utils/sla.ts) เป๊ะ
+ *
+ * ที่ต้องย้ำ: ตัวที่สองคือ "เวลาที่เปิดเคส" ไม่ใช่ "เวลาปัจจุบัน"
+ * เดิมที่นี่ตัวที่สองเป็น now — ถ้ามีใครส่งค่าเข้ามาโดยเทียบกับ webapp
+ * จะได้เส้นตายผิดแบบเงียบ ๆ (Add-in สร้างเคสใหม่เท่านั้น จึงไม่เคยส่ง)
+ */
+export function computeSlaDue(
+  hours: number | null | undefined,
+  createdIso?: string,
+  now = new Date(),
+): string | null {
   const h = typeof hours === 'number' && Number.isFinite(hours) && hours > 0 ? hours : null
-  return h ? new Date(now.getTime() + h * 3600000).toISOString() : null
+  if (!h) return null
+  const start = createdIso ? new Date(createdIso) : now
+  const base = isNaN(start.getTime()) ? now : start
+  return new Date(base.getTime() + h * 3600000).toISOString()
 }
 
 export function slaDueLabel(hours: number | null | undefined): string {

@@ -257,6 +257,15 @@ async function logout(): Promise<void> {
 }
 
 // ─── SharePoint REST ──────────────────────────────────────────────────────────
+// ⚠ สำเนาตรรกะจาก itservices-webapp/src/utils/ackInbox.ts (ackOnCreate)
+// งานที่มอบหมายให้คนอื่นต้องไปรอในกล่อง "รอรับงาน" ของ webapp ก่อน
+// ถ้า Add-in ไม่เขียนค่านี้ งานที่เปิดจากอีเมลจะข้ามประตูรับงานไปเลย
+function ackOnCreate(assigneeEmail?: string, actorEmail?: string): Record<string, unknown> {
+  const to = (assigneeEmail ?? '').trim().toLowerCase()
+  if (!to) return { IsAcknowledged: false }
+  return { IsAcknowledged: to === (actorEmail ?? '').trim().toLowerCase() }
+}
+
 async function spCreate(listTitle: string, body: Record<string, unknown>): Promise<number> {
   const token = await getToken()
   const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items`
@@ -273,6 +282,27 @@ async function spCreate(listTitle: string, body: Record<string, unknown>): Promi
 
   if (!res.ok) {
     const errText = await res.text()
+    // ลิสต์ที่ยังไม่มีคอลัมน์เรื่องการรับงาน จะปฏิเสธทั้งรายการ
+    // สร้างงานไม่ได้เลยแย่กว่าสร้างได้แต่ไม่ได้เข้ากล่องรอรับงาน — ลองซ้ำโดยตัดฟิลด์นั้นออก
+    const ackKeys = ['IsAcknowledged', 'AcknowledgedBy', 'AcknowledgedDate']
+    if (ackKeys.some(k => k in body)) {
+      const trimmed = { ...body }
+      for (const k of ackKeys) delete trimmed[k]
+      const retry = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json;odata=nometadata',
+          'Content-Type': 'application/json;odata=nometadata',
+        },
+        body: JSON.stringify(trimmed),
+      })
+      if (retry.ok) {
+        console.warn(`[SP] ${listTitle} ไม่มีคอลัมน์ IsAcknowledged — สร้างแล้วแต่ไม่ได้เข้ากล่องรอรับงาน`)
+        const d = await retry.json() as { Id: number }
+        return d.Id
+      }
+    }
     throw new Error(`SharePoint error ${res.status}: ${errText}`)
   }
   const data = await res.json() as { Id: number }
@@ -735,6 +765,9 @@ async function handleSubmit(): Promise<void> {
         Status: 'Open',
         AssignedEmail: assignedEmail || undefined,
         AssignedToName: assignedAgent?.name ?? state.account?.name ?? '',
+        // มอบหมายให้คนอื่น = ต้องไปรอในกล่อง "รอรับงาน" ของ webapp ก่อน
+        // ไม่งั้น ticket ที่เปิดจาก Add-in จะข้ามประตูรับงานไปเลย
+        ...ackOnCreate(assignedEmail, state.account?.username),
         // Ticket ผูกกับโครงการได้ (ไม่บังคับ) — งานในโครงการไม่ได้มีแค่ Incident
         ProjectID: parseInt((document.getElementById('f-project') as HTMLSelectElement)?.value || '0') || null,
       })
@@ -857,6 +890,7 @@ async function handleSubmit(): Promise<void> {
         Status: status,
         AssignedTo: assignedAgent?.name ?? state.account.name ?? state.account.username,
         AssignedEmail: assignedEmail,
+        ...ackOnCreate(assignedEmail, state.account?.username),
         ProjectID: projectId,
         IncidentDate: incidentDate || todayISO(),
         Resolution: resolution || undefined,
