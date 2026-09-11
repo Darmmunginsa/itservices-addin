@@ -1,4 +1,5 @@
 import { stripQuoted } from './emailQuote'
+import { findTemplate, renderTemplate, renderSubject, textToHtml, type MailVars } from './emailTemplate'
 import { incidentMailPlan } from './incidentMail'
 import { SLA_OPTIONS, SLA_BY_SEVERITY, computeSlaDue, slaDueLabel } from './sla'
 import { initPhish, analysePhish, phishPanelHTML, bindPhishPanel, submitPhishReport, phishSubmitLabel } from './phishPanel'
@@ -312,12 +313,16 @@ async function spCreate(listTitle: string, body: Record<string, unknown>): Promi
 // ─── Email notifications (ทำงานเหมือน webapp: HD_EmailTemplates + Graph sendMail) ──
 interface EmailTemplate { EventKey: string; Subject: string; Body: string; IsEnabled: boolean }
 let _tplCache: EmailTemplate[] | null = null
+// เดิม cache ไม่มีวันหมดอายุ — แก้ template ในหน้า Admin แล้ว Add-in ยังส่งเนื้อเดิม
+// จนกว่าจะรีสตาร์ท Outlook · 5 นาทีเท่ากับฝั่ง webapp
+let _tplCacheAt = 0
+const TPL_TTL_MS = 5 * 60 * 1000
 const DEFAULT_SENDER = 'support@itservices.co.th'
 // CC ทุกครั้งที่เปิด Ticket ใหม่ (ทีมวิศวกรต้องรับรู้ทุกเคส)
 const ALWAYS_CC_TICKET = 'engineer@itservices.co.th'
 
 async function getEmailTemplates(): Promise<EmailTemplate[]> {
-  if (_tplCache) return _tplCache
+  if (_tplCache && Date.now() - _tplCacheAt < TPL_TTL_MS) return _tplCache
   try {
     const token = await getToken()
     const url = `${SHAREPOINT_URL}/_api/web/lists/getbytitle('HD_EmailTemplates')/items?$select=EventKey,Subject,Body,IsEnabled&$top=50`
@@ -325,6 +330,7 @@ async function getEmailTemplates(): Promise<EmailTemplate[]> {
     if (!res.ok) return []
     const data = await res.json() as { value: EmailTemplate[] }
     _tplCache = data.value
+    _tplCacheAt = Date.now()
     return _tplCache
   } catch { return [] }
 }
@@ -340,21 +346,24 @@ async function getSenderAddress(): Promise<string> {
   } catch { return DEFAULT_SENDER }
 }
 
-function renderTpl(tpl: string, vars: Record<string, string>): string {
-  return tpl.replace(/\{\{(\w+)\}\}/g, (_, k) => vars[k] ?? `{{${k}}}`)
-}
-
-async function sendTemplateEmail(eventKey: string, vars: Record<string, string>, to: string[], cc: string[] = []): Promise<void> {
+/**
+ * ส่งเมลตาม template — คืน true เมื่อส่งออกจริง
+ *
+ * เดิมคืน void, ไม่เช็ค res.ok และครอบ catch {} ทั้งก้อน → เมลจาก Add-in ล้มเหลวได้แบบไม่มีร่องรอย
+ * ตอนนี้ผู้เรียกรู้ผลและบอกผู้ใช้ได้ · การหา template ใช้ตัวเดียวกับ webapp
+ * (ทนช่องว่าง/ตัวพิมพ์) · ตัวแปรถูกหนีอักขระเป็นค่าเริ่มต้นเหมือนกัน
+ */
+async function sendTemplateEmail(eventKey: string, vars: MailVars, to: string[], cc: string[] = []): Promise<boolean> {
   try {
     const templates = await getEmailTemplates()
-    const tpl = templates.find(t => t.EventKey === eventKey && t.IsEnabled)
-    if (!tpl) return
-    const subject = renderTpl(tpl.Subject || '', vars)
-    const body = renderTpl(tpl.Body || '', vars)
-    if (!subject || !body) return
+    const tpl = findTemplate(templates, eventKey)
+    if (!tpl) { console.warn(`[mail] ไม่พบ template "${eventKey}" ที่เปิดใช้`); return false }
+    const subject = renderSubject(tpl.Subject || '', vars)
+    const body = renderTemplate(tpl.Body || '', vars).text
+    if (!subject || !body) { console.warn(`[mail] template "${eventKey}" Subject/Body ว่าง`); return false }
     const norm = (e: string) => e.trim().toLowerCase()
     const toArr = [...new Map(to.filter(Boolean).map(e => [norm(e), e])).values()]
-    if (toArr.length === 0) return
+    if (toArr.length === 0) return false
     const toSet = new Set(toArr.map(norm))
     // เปิด Ticket ใหม่ → CC ทีมวิศวกรเสมอ
     const ccAll = eventKey === 'ticket_created' ? [...cc, ALWAYS_CC_TICKET] : cc
@@ -368,12 +377,17 @@ async function sendTemplateEmail(eventKey: string, vars: Record<string, string>,
     }
     if (ccArr.length) message.ccRecipients = ccArr.map(a => ({ emailAddress: { address: a } }))
     if (from) message.from = { emailAddress: { address: from } }
-    await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+    const res = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, saveToSentItems: true }),
     })
-  } catch { /* email fail = non-critical */ }
+    if (!res.ok) { console.warn(`[mail] sendMail ${res.status}`, await res.text().catch(() => '')); return false }
+    return true
+  } catch (e) {
+    console.warn('[mail] ส่งไม่สำเร็จ', e)
+    return false
+  }
 }
 
 /**
@@ -417,11 +431,11 @@ async function replyInThread(bodyHtml: string, extraCc: string[] = []): Promise<
 }
 
 /** เนื้อหาเมลจาก template (ไม่ส่ง) — ใช้กับการตอบกลับในเธรด */
-async function renderTemplateBody(eventKey: string, vars: Record<string, string>): Promise<string | null> {
+async function renderTemplateBody(eventKey: string, vars: MailVars): Promise<string | null> {
   const templates = await getEmailTemplates()
-  const tpl = templates.find(t => t.EventKey === eventKey && t.IsEnabled)
+  const tpl = findTemplate(templates, eventKey)
   if (!tpl) return null
-  const body = renderTpl(tpl.Body || '', vars)
+  const body = renderTemplate(tpl.Body || '', vars).text
   return body || null
 }
 
@@ -792,7 +806,8 @@ async function handleSubmit(): Promise<void> {
         ticket_title: title,
         priority,
         category: '-',
-        description: (description || '-').replace(/\n/g, '<br>'),
+        // ข้อความจากอีเมลลูกค้า — หนีอักขระก่อน ไม่ใช่ยัดเข้าเมลดิบ ๆ
+        description: textToHtml(description || '-'),
         customer_name: state.emailSenderName || customerEmail,
         assigned_name: assignedAgent?.name ?? state.account?.name ?? '-',
         link: 'https://itservices.co.th/helpdesk/',
@@ -810,10 +825,13 @@ async function handleSubmit(): Promise<void> {
            </div>`
         repliedInThread = await replyInThread(banner + tplBody, ccList)
       }
+      let mailed = repliedInThread
       if (!repliedInThread) {
-        await sendTemplateEmail('ticket_created', tplVars, [customerEmail], ccList)
+        mailed = await sendTemplateEmail('ticket_created', tplVars, [customerEmail], ccList)
       }
-      showToast(repliedInThread ? 'สร้าง Ticket และตอบกลับในเธรดเดิมแล้ว!' : 'สร้าง Ticket สำเร็จ!')
+      // เมลไม่ออกต้องบอก — ไม่งั้นคนกดเชื่อว่าลูกค้าได้รับแล้ว
+      if (mailed) showToast(repliedInThread ? 'สร้าง Ticket และตอบกลับในเธรดเดิมแล้ว!' : 'สร้าง Ticket สำเร็จ!')
+      else showToast(`สร้าง Ticket ${ticketNum} แล้ว แต่ส่งเมลถึงลูกค้าไม่สำเร็จ — ตรวจ template ticket_created ที่หน้า Diagnostic`, 'error')
 
     } else if (state.tab === 'task') {
       const title = (document.getElementById('f-title') as HTMLInputElement).value.trim()
@@ -928,9 +946,10 @@ async function handleSubmit(): Promise<void> {
           actorEmail: state.account.username,
           baseUrl: 'https://itservices.co.th/helpdesk/',
         })
-        if (plan.to.length > 0) await sendTemplateEmail('incident_created', plan.vars, plan.to, plan.cc)
+        const mailed = plan.to.length === 0 ? true : await sendTemplateEmail('incident_created', plan.vars, plan.to, plan.cc)
+        if (mailed) showToast('สร้าง Incident สำเร็จ!')
+        else showToast('สร้าง Incident แล้ว แต่ส่งเมลแจ้งไม่สำเร็จ — ผู้รับผิดชอบยังไม่รู้เรื่อง (ตรวจ template incident_created)', 'error')
       }
-      showToast('สร้าง Incident สำเร็จ!')
 
     } else if (state.tab === 'comment') {
       const ticketId = parseInt((document.getElementById('f-ticket') as HTMLSelectElement)?.value || '0')

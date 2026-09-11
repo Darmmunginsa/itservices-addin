@@ -1,10 +1,11 @@
-// ⚠ สำเนาจาก itservices-webapp/src/utils/incidentMail.ts — แก้ที่ไหนต้องแก้อีกที่ด้วย
-//   (เหมือน sla.ts / emailQuote.ts)
+// ⚠ สำเนาจาก itservices-webapp/src/utils/incidentMail.ts — แก้ที่ไหนต้องแก้อีกที่ด้วย (npm run check:addin ตรวจให้)
 // ประกอบผู้รับและตัวแปรของเมล Incident ให้ทุกหน้าที่สร้าง/แก้ Incident ใช้ชุดเดียวกัน
 //
 // มี 3 ทางที่แตะ Incident ได้ (หน้าโครงการ, หน้าแจ้งงาน, Add-in) ถ้าต่างคนต่างประกอบ
 // ผู้รับเอง จะเพี้ยนกันจนบางคนได้เมลบางจังหวะเท่านั้น ซึ่งแย่กว่าไม่ได้เลย
 // เพราะคนอ่านจะเชื่อว่าตัวเองได้ครบ
+
+import { textToHtml, type MailVars } from './emailTemplate'
 
 export interface IncidentMailInput {
   title: string
@@ -30,7 +31,7 @@ export interface IncidentMailInput {
 export interface IncidentMailPlan {
   to: string[]
   cc: string[]
-  vars: Record<string, string>
+  vars: MailVars
 }
 
 const norm = (e?: string): string => (e ?? '').trim().toLowerCase()
@@ -67,10 +68,9 @@ export function incidentRecipients(i: IncidentMailInput): { to: string[]; cc: st
   return { to, cc: rest }
 }
 
+// ไม่ได้ตั้ง SLA ต้องมีคำอ่านได้ ไม่ใช่ค่าว่าง — template แทนค่าตรง ๆ ไม่มี if
+// ช่องที่หายไปกลางตารางในเมลถึงลูกค้าดูเหมือนระบบพัง มากกว่าดูเหมือนไม่ได้ตั้ง
 const SLA_TEXT = (h?: number | null): string => {
-  // ต้องตรงกับ webapp: ไม่ได้ตั้ง SLA ต้องมีคำอ่านได้ ไม่ใช่ค่าว่าง
-  // template แทนค่าตรง ๆ ไม่มี if — ช่องที่หายไปกลางตารางในเมลถึงลูกค้า
-  // ดูเหมือนระบบพัง มากกว่าดูเหมือนไม่ได้ตั้ง
   if (!h || h <= 0) return 'ไม่ได้กำหนด'
   if (h < 24) return `${h} ชั่วโมง`
   const d = h / 24
@@ -78,14 +78,16 @@ const SLA_TEXT = (h?: number | null): string => {
 }
 
 /** ตัวแปรที่ template ใช้แทนค่าได้ — ค่าที่ไม่มีให้เป็นสตริงว่าง ไม่ใช่ undefined */
-export function incidentVars(i: IncidentMailInput): Record<string, string> {
+export function incidentVars(i: IncidentMailInput): MailVars {
   const base = (i.baseUrl ?? '').replace(/\/+$/, '')
   return {
     incident_title: i.title ?? '',
     severity: i.severity ?? '',
     status: i.status ?? '',
-    description: i.description ?? '',
-    resolution: i.resolution ?? '',
+    // คำอธิบายมีหลายบรรทัด — ต้องแปลง <br> ให้ ไม่งั้นยุบเป็นบรรทัดเดียวในเมล
+    // และต้องหนีอักขระก่อน เพราะเป็นข้อความที่คนพิมพ์เอง ไม่ใช่ HTML
+    description: textToHtml(i.description),
+    resolution: textToHtml(i.resolution),
     incident_date: (i.incidentDate ?? '').slice(0, 10),
     sla_hours: SLA_TEXT(i.slaHours),
     project_name: i.projectName ?? '',
