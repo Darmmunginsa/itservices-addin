@@ -1,5 +1,6 @@
 import { stripQuoted } from './emailQuote'
 import { findTemplate, renderTemplate, renderSubject, textToHtml, type MailVars } from './emailTemplate'
+import { buildGraphMessage, isSendAsDenied, type SendAs } from './mailSender'
 import { incidentMailPlan } from './incidentMail'
 import { SLA_OPTIONS, SLA_BY_SEVERITY, computeSlaDue, slaDueLabel } from './sla'
 import { initPhish, analysePhish, phishPanelHTML, bindPhishPanel, submitPhishReport, phishSubmitLabel } from './phishPanel'
@@ -370,18 +371,22 @@ async function sendTemplateEmail(eventKey: string, vars: MailVars, to: string[],
     const ccArr = [...new Map(ccAll.filter(Boolean).map(e => [norm(e), e])).values()].filter(e => !toSet.has(norm(e)))
     const from = await getSenderAddress()
     const token = await getGraphToken()
-    const message: Record<string, unknown> = {
-      subject,
-      body: { contentType: 'HTML', content: body },
-      toRecipients: toArr.map(a => ({ emailAddress: { address: a } })),
-    }
-    if (ccArr.length) message.ccRecipients = ccArr.map(a => ({ emailAddress: { address: a } }))
-    if (from) message.from = { emailAddress: { address: from } }
-    const res = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+    // ส่งในนามบัญชีกลาง — ไม่มีสิทธิ์ Send As → ส่งจากตัวเอง + reply-to กลับกล่องกลาง (เหมือน webapp)
+    const post = (sendAs: SendAs) => fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, saveToSentItems: true }),
+      body: JSON.stringify({
+        message: buildGraphMessage({ to: toArr, cc: ccArr, subject, html: body, from: from || undefined, sendAs }),
+        saveToSentItems: true,
+      }),
     })
+    let res = await post(from ? 'shared' : 'self')
+    if (!res.ok && from) {
+      const text = await res.text().catch(() => '')
+      if (!isSendAsDenied(res.status, text)) { console.warn(`[mail] sendMail ${res.status}`, text); return false }
+      console.warn(`[mail] ไม่มีสิทธิ์ Send As ของ ${from} — ส่งจากบัญชีตัวเองแทน`)
+      res = await post('self')
+    }
     if (!res.ok) { console.warn(`[mail] sendMail ${res.status}`, await res.text().catch(() => '')); return false }
     return true
   } catch (e) {
