@@ -400,7 +400,12 @@ async function sendTemplateEmail(eventKey: string, vars: MailVars, to: string[],
  * ใช้ Graph: createReplyAll → แก้ body/ผู้รับ → send
  * คืน true ถ้าส่งในเธรดสำเร็จ ; false ถ้าทำไม่ได้ (ผู้เรียกควร fallback ไปส่งเมลใหม่)
  */
-async function replyInThread(bodyHtml: string, extraCc: string[] = []): Promise<boolean> {
+/**
+ * ตอบกลับในเธรดเดิม
+ * @param replyAll true = ตอบทุกคน (คงผู้รับ To/CC เดิมของเมล) · false = ตอบเฉพาะผู้ส่ง — ใช้ตอนผู้ใช้ไม่ติ๊ก "แนบผู้รับในเมลนี้เป็น CC"
+ *   (เดิมใช้ createReplyAll เสมอ → คน CC ในเมลต้นทางได้รับด้วยแม้ไม่ได้ติ๊ก)
+ */
+async function replyInThread(bodyHtml: string, extraCc: string[] = [], replyAll = true): Promise<boolean> {
   try {
     const mbItem = Office.context.mailbox.item
     if (!mbItem?.itemId) return false   // อยู่ในโหมด compose หรือไม่มีอีเมลเปิดอยู่
@@ -408,8 +413,8 @@ async function replyInThread(bodyHtml: string, extraCc: string[] = []): Promise<
     const token = await getGraphToken()
     const H = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
 
-    // 1) สร้าง draft ตอบกลับทุกคน — Graph ใส่หัวข้อเดิม + header เธรดให้อัตโนมัติ
-    const cRes = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${restId}/createReplyAll`, { method: 'POST', headers: H })
+    // 1) สร้าง draft ตอบกลับ (ทุกคน / เฉพาะผู้ส่ง) — Graph ใส่หัวข้อเดิม + header เธรดให้อัตโนมัติ
+    const cRes = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${restId}/${replyAll ? 'createReplyAll' : 'createReply'}`, { method: 'POST', headers: H })
     if (!cRes.ok) return false
     const draft = await cRes.json() as { id: string; ccRecipients?: { emailAddress: { address: string } }[] }
 
@@ -828,7 +833,7 @@ async function handleSubmit(): Promise<void> {
              <div style="font-size:15px;font-weight:700;color:#1e40af">Ticket No. ${ticketNum}</div>
              <div style="font-size:12px;color:#475569;margin-top:2px">กรุณาตอบกลับในอีเมลฉบับนี้เพื่อให้ข้อมูลอยู่ใน Ticket เดียวกัน</div>
            </div>`
-        repliedInThread = await replyInThread(banner + tplBody, ccList)
+        repliedInThread = await replyInThread(banner + tplBody, ccList, ccEnabled)
       }
       let mailed = repliedInThread
       if (!repliedInThread) {
