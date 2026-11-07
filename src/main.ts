@@ -943,6 +943,14 @@ async function handleSubmit(): Promise<void> {
       // แจ้งทางอีเมลด้วย — Incident เป็นเรื่องเร่งด่วน รอให้คนบังเอิญเปิดแอปไม่ทัน
       {
         const proj = state.projects.find(p => p.id === projectId)
+        // เจ้าของโครงการ — รายการโครงการโหลดมาแค่ Id/Title จึงดึงเพิ่มเฉพาะตัวที่เลือก
+        let projectOwner: string | undefined
+        try {
+          const token = await getToken()
+          const pRes = await fetch(`${SHAREPOINT_URL}/_api/web/lists/getbytitle('PM_Projects')/items(${projectId})?$select=CreatedByEmail`,
+            { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json;odata=nometadata' } })
+          if (pRes.ok) projectOwner = ((await pRes.json()) as { CreatedByEmail?: string }).CreatedByEmail
+        } catch { /* ไม่ได้ก็ส่งเท่าที่มี */ }
         const plan = incidentMailPlan({
           title, severity, status,
           description,
@@ -953,11 +961,18 @@ async function handleSubmit(): Promise<void> {
           assignedName: assignedAgent?.name,
           assignedEmail,
           requesterEmail: state.account.username,
+          // ผู้เกี่ยวข้องเหมือนหน้าแจ้งงานใน webapp: เจ้าของโครงการ + ผู้ส่งอีเมลต้นทาง (เจ้าของปัญหา)
+          // เดิมไม่มีเลย → มอบหมายให้ตัวเอง = ไม่มีผู้รับสักคน เมลไม่ออก แต่ขึ้น "สำเร็จ"
+          watchers: [projectOwner, state.emailSenderEmail],
           actorEmail: state.account.username,
           baseUrl: 'https://itservices.co.th/helpdesk/',
         })
-        const mailed = plan.to.length === 0 ? true : await sendTemplateEmail('incident_created', plan.vars, plan.to, plan.cc)
-        if (mailed) showToast('สร้าง Incident สำเร็จ!')
+        if (plan.to.length === 0) {
+          showToast('สร้าง Incident สำเร็จ — ไม่ได้ส่งเมล เพราะไม่มีผู้รับนอกจากตัวคุณเอง (มอบหมายให้ตัวเอง และไม่มีผู้เกี่ยวข้องอื่น)')
+          return
+        }
+        const mailed = await sendTemplateEmail('incident_created', plan.vars, plan.to, plan.cc)
+        if (mailed) showToast(`สร้าง Incident และส่งเมลแจ้ง ${[...plan.to, ...plan.cc].length} คนแล้ว!`)
         else showToast('สร้าง Incident แล้ว แต่ส่งเมลแจ้งไม่สำเร็จ — ผู้รับผิดชอบยังไม่รู้เรื่อง (ตรวจ template incident_created)', 'error')
       }
 
