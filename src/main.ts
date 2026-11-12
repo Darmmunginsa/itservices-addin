@@ -426,7 +426,10 @@ async function replyInThread(bodyHtml: string, extraCc: string[] = [], replyAll 
       .filter(e => !have.has(norm(e)))
       .map(a => ({ emailAddress: { address: a } }))
 
-    const patch: Record<string, unknown> = { body: { contentType: 'HTML', content: bodyHtml } }
+    // Reply-To = กล่องกลาง (support@) — เมลนี้ส่งจากกล่องของคนกด ถ้าไม่ตั้ง ลูกค้าตอบกลับจะเข้ากล่องส่วนตัว
+    // แล้ว Power Automate ที่ฟัง support@ ไม่เห็น → คอมเมนต์ไม่ sync กลับเข้า Ticket
+    const shared = await getSenderAddress()
+    const patch: Record<string, unknown> = { body: { contentType: 'HTML', content: bodyHtml }, replyTo: [{ emailAddress: { address: shared } }] }
     if (addCc.length) patch.ccRecipients = [...existingCc, ...addCc]
 
     const pRes = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${draft.id}`, {
